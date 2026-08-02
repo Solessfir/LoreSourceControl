@@ -12,7 +12,6 @@
 #include "SourceControlOperations.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Paths.h"
-#include "Async/Async.h"
 #if SOURCE_CONTROL_WITH_SLATE
 #include "SourceControlWindows.h"
 #include "ToolMenus.h"
@@ -32,8 +31,6 @@
 #include "Interfaces/IMainFrameModule.h"
 #include "Editor.h"
 #include "Subsystems/AssetEditorSubsystem.h"
-#include "Toolkits/AssetEditorToolkit.h"
-#include "Toolkits/IToolkitHost.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
@@ -58,6 +55,9 @@ void FLoreSourceControlModule::StartupModule()
 	LoreSourceControlProvider.RegisterWorker("MarkForAdd", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreMarkForAddWorker>));
 	LoreSourceControlProvider.RegisterWorker("Delete", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreDeleteWorker>));
 	LoreSourceControlProvider.RegisterWorker("Unlock", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreUnlockWorker>));
+	LoreSourceControlProvider.RegisterWorker("LorePrintStatus", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLorePrintStatusWorker>));
+	LoreSourceControlProvider.RegisterWorker("LoreRefreshBranches", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreRefreshBranchesWorker>));
+	LoreSourceControlProvider.RegisterWorker("LoreSwitchBranch", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreSwitchBranchWorker>));
 
 	// Load settings (binary path, etc.)
 	LoreSourceControlProvider.LoadSettings();
@@ -66,28 +66,26 @@ void FLoreSourceControlModule::StartupModule()
 	IModularFeatures::Get().RegisterModularFeature("SourceControl", &LoreSourceControlProvider);
 
 	// Console commands for quick access inside editor (main goal: no need to close editor)
-	IConsoleManager::Get().RegisterConsoleCommand(
+	LoreSyncCommand = IConsoleManager::Get().RegisterConsoleCommand(
 		TEXT("LoreSync"),
 		TEXT("Perform a Lore sync (pull) and update source control states."),
-		FConsoleCommandDelegate::CreateLambda([]()
+		FConsoleCommandDelegate::CreateLambda([this]()
 		{
-			ISourceControlModule& SCModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-			if (SCModule.GetProvider().GetName() == "Lore")
+			if (ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName())
 			{
 				const TSharedRef<FSync> SyncOp = ISourceControlOperation::Create<FSync>();
-				SCModule.GetProvider().Execute(SyncOp, EConcurrency::Synchronous);
+				LoreSourceControlProvider.Execute(SyncOp, EConcurrency::Asynchronous);
 			}
 		}),
 		ECVF_Default
 	);
 
-	IConsoleManager::Get().RegisterConsoleCommand(
+	LoreStatusCommand = IConsoleManager::Get().RegisterConsoleCommand(
 		TEXT("LoreStatus"),
 		TEXT("Force update Lore source control status for the project and print it in human-readable form."),
-		FConsoleCommandDelegate::CreateLambda([]()
+		FConsoleCommandDelegate::CreateLambda([this]()
 		{
-			ISourceControlModule& SCModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-			if (SCModule.GetProvider().GetName() != "Lore")
+			if (ISourceControlModule::Get().GetProvider().GetName() != LoreSourceControlProvider.GetName())
 			{
 				return;
 			}
@@ -95,45 +93,21 @@ void FLoreSourceControlModule::StartupModule()
 			// Refresh the editor's own state cache (Content Browser icons, etc.) - this leg always needs
 			// --json, same as every other internal caller.
 			const TSharedRef<FUpdateStatus> StatusOp = ISourceControlOperation::Create<FUpdateStatus>();
-			SCModule.GetProvider().Execute(StatusOp, TArray<FString>{ FPaths::ProjectDir() }, EConcurrency::Synchronous);
+			LoreSourceControlProvider.Execute(StatusOp, TArray<FString>{ FPaths::ProjectDir() }, EConcurrency::Asynchronous);
 
-			// Separate call, without --json, so the console shows lore's own readable status text
-			// instead of raw JSON. Runs on the pool - unlike Execute() above (which pumps Slate while
-			// it waits), a direct RunLoreCommand here would freeze the editor for the whole scan.
-			FLoreSourceControlProvider& Provider = static_cast<FLoreSourceControlProvider&>(SCModule.GetProvider());
-			const FString LoreBinary = Provider.GetLoreBinaryPath();
-			const FString RepositoryRoot = Provider.GetRepositoryRoot();
-
-			Async(EAsyncExecution::ThreadPool, [LoreBinary, RepositoryRoot]()
-			{
-				TArray<FString> Results, Errors;
-				FLoreSourceControlUtils::RunLoreCommand(TEXT("status"), LoreBinary, RepositoryRoot, { TEXT("--scan") }, TArray<FString>(), Results, Errors, /*bUseJson=*/false);
-
-				AsyncTask(ENamedThreads::GameThread, [Results, Errors]()
-				{
-					for (const FString& Line : Results)
-					{
-						UE_LOG(LogSourceControl, Display, TEXT("%s"), *Line);
-					}
-
-					for (const FString& Line : Errors)
-					{
-						UE_LOG(LogSourceControl, Error, TEXT("%s"), *Line);
-					}
-				});
-			});
+			// FIFO command dispatch guarantees the readable output is generated after the cache refresh.
+			LoreSourceControlProvider.Execute(ISourceControlOperation::Create<FLorePrintStatusOperation>(), EConcurrency::Asynchronous);
 		}),
 		ECVF_Default
 	);
 
-	IConsoleManager::Get().RegisterConsoleCommand(
+	LoreCommitCommand = IConsoleManager::Get().RegisterConsoleCommand(
 		TEXT("LoreCommit"),
 		TEXT("Open the Submit Files dialog to commit and push pending changes via Lore."),
-		FConsoleCommandDelegate::CreateLambda([]()
+		FConsoleCommandDelegate::CreateLambda([this]()
 		{
 #if SOURCE_CONTROL_WITH_SLATE
-			ISourceControlModule& SCModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-			if (SCModule.GetProvider().GetName() == "Lore")
+			if (ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName())
 			{
 				// Same dialog as the toolbar's "Submit Content" - drives our CheckIn worker (commit + push).
 				FSourceControlWindows::ChoosePackagesToCheckIn();
@@ -180,17 +154,39 @@ void FLoreSourceControlModule::StartupModule()
 
 void FLoreSourceControlModule::ShutdownModule()
 {
+	IConsoleManager& ConsoleManager = IConsoleManager::Get();
+	if (LoreSyncCommand)
+	{
+		ConsoleManager.UnregisterConsoleObject(LoreSyncCommand, false);
+		LoreSyncCommand = nullptr;
+	}
+
+	if (LoreStatusCommand)
+	{
+		ConsoleManager.UnregisterConsoleObject(LoreStatusCommand, false);
+		LoreStatusCommand = nullptr;
+	}
+
+	if (LoreCommitCommand)
+	{
+		ConsoleManager.UnregisterConsoleObject(LoreCommitCommand, false);
+		LoreCommitCommand = nullptr;
+	}
+
 #if SOURCE_CONTROL_WITH_SLATE
 	if (IMainFrameModule* MainFrameModule = FModuleManager::GetModulePtr<IMainFrameModule>("MainFrame"))
 	{
 		MainFrameModule->OnMainFrameCreationFinished().RemoveAll(this);
 	}
+
 	LoreSourceControlProvider.UnregisterSourceControlStateChanged_Handle(SourceControlStateChangedHandle);
 	ISourceControlModule::Get().UnregisterProviderChanged(SourceControlProviderChangedHandle);
+
 	if (FSlateApplication::IsInitialized())
 	{
 		FSlateApplication::Get().OnWindowBeingDestroyed().Remove(WindowBeingDestroyedHandle);
 	}
+
 	if (GEditor)
 	{
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
@@ -198,6 +194,7 @@ void FLoreSourceControlModule::ShutdownModule()
 			AssetEditorSubsystem->OnAssetOpenedInEditor().RemoveAll(this);
 		}
 	}
+
 	if (const UToolMenus* ToolMenus = UToolMenus::TryGet())
 	{
 		ToolMenus->UnregisterOwner(this);
@@ -280,27 +277,15 @@ void FLoreSourceControlModule::OnAssetEditorOpened(UObject* InAsset, IAssetEdito
 		return;
 	}
 
-	// Every asset editor instance in the engine derives from FAssetEditorToolkit - IAssetEditorInstance
-	// itself has no GetToolkitHost(), so this cast is required to reach it. Epic relies on the same
-	// cast elsewhere (e.g. FBlueprintEditorUtils::MarkBlueprintAsModified).
-	const FAssetEditorToolkit* Toolkit = static_cast<FAssetEditorToolkit*>(InInstance);
-	if (!Toolkit->IsHosted())
+	// GetEditorName is part of IAssetEditorInstance and works for toolkit-based editors, UAssetEditor,
+	// and other implementations. The status bar strips FName instance suffixes the same way.
+	const FName EditorName = InInstance->GetEditorName();
+	if (EditorName.IsNone())
 	{
 		return;
 	}
 
-	// World-centric editors (inline in the Level Editor) share its status bar, which is already
-	// covered by RegisterToolbarExtension() above - only standalone editors get their own here.
-	const FName StatusBarName = Toolkit->GetToolkitHost()->GetStatusBarName();
-	if (StatusBarName.IsNone())
-	{
-		return;
-	}
-
-	// GetPlainNameString() (not ToString()) strips the FName's numeric instance suffix, matching what
-	// SStatusBar::GetToolbarName() actually generates - e.g. StatusBarName "BlueprintEditor_3" still
-	// yields toolbar menu "BlueprintEditor.ToolBar", shared per editor *type*, not per window.
-	RegisterToolbarExtensionForMenu(FName(*(StatusBarName.GetPlainNameString() + TEXT(".ToolBar"))));
+	RegisterToolbarExtensionForMenu(FName(*(EditorName.GetPlainNameString() + TEXT(".ToolBar"))));
 }
 
 void FLoreSourceControlModule::RegisterToolbarExtensionForMenu(FName InMenuName)
@@ -473,37 +458,39 @@ void FLoreSourceControlModule::OnBranchSelected(FString InBranchName)
 		return;
 	}
 
-	TArray<FString> ChangedContentPaths;
-	const bool bRequiresRestart = LoreSourceControlProvider.DoesBranchSwitchTouchCode(InBranchName, ChangedContentPaths);
-
-	const FText ConfirmText = bRequiresRestart
-		? FText::Format(LOCTEXT("SwitchBranchConfirmRestart", "Switch to branch '{0}'?\n\nThis branch has Source/Config changes, so restart the editor after switching to pick up the new code. Close any open assets first."), FText::FromString(InBranchName))
-		: FText::Format(LOCTEXT("SwitchBranchConfirmContent", "Switch to branch '{0}'?\n\nThis only changes Content - affected assets will be reloaded automatically. Save any unsaved work first."), FText::FromString(InBranchName));
+	const FText ConfirmText = FText::Format(
+		LOCTEXT("SwitchBranchConfirm", "Switch to branch '{0}'?\n\nFiles in the working copy may change. Save any unsaved work first; affected Content will be reloaded, or you will be asked to restart if Source/Config changed."),
+		FText::FromString(InBranchName));
 
 	if (FMessageDialog::Open(EAppMsgType::YesNo, ConfirmText) != EAppReturnType::Yes)
 	{
 		return;
 	}
 
-	switch (LoreSourceControlProvider.SwitchBranch(InBranchName))
-	{
-	case FLoreSourceControlProvider::ELoreSwitchResult::Success:
-		LoreSourceControlProvider.RefreshBranchesAsync();
-		if (bRequiresRestart)
-		{
-			FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("SwitchBranchRestart", "Branch switched. Please restart the editor now to pick up the new code."));
-		}
-		else
-		{
-			LoreSourceControlProvider.ReloadContentPackages(ChangedContentPaths);
-		}
-		break;
+	const TSharedRef<FLoreSwitchBranchOperation> Operation = ISourceControlOperation::Create<FLoreSwitchBranchOperation>(MoveTemp(InBranchName));
+	LoreSourceControlProvider.Execute(
+		Operation,
+		TArray<FString>(),
+		EConcurrency::Asynchronous,
+		FSourceControlOperationComplete::CreateRaw(this, &FLoreSourceControlModule::OnBranchSwitchComplete));
+}
 
-	case FLoreSourceControlProvider::ELoreSwitchResult::StagedStateBlocked:
+void FLoreSourceControlModule::OnBranchSwitchComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult)
+{
+	const TSharedRef<FLoreSwitchBranchOperation> Operation = StaticCastSharedRef<FLoreSwitchBranchOperation>(InOperation);
+	if (InResult == ECommandResult::Succeeded)
+	{
+		LoreSourceControlProvider.RefreshBranchesAsync();
+		return;
+	}
+
+	switch (Operation->GetOutcome())
+	{
+	case FLoreSwitchBranchOperation::EOutcome::StagedStateBlocked:
 		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("SwitchBranchStaged", "Can't switch branch: you have a staged change on the current branch that hasn't been pushed yet.\n\nPush or revert it, then try again."));
 		break;
 
-	case FLoreSourceControlProvider::ELoreSwitchResult::Failed:
+	case FLoreSwitchBranchOperation::EOutcome::Failed:
 	default:
 		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("SwitchBranchFailed", "Failed to switch branch. See the Source Control message log for details."));
 		break;

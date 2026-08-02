@@ -45,15 +45,15 @@ public:
 	virtual bool IsSourceControlled() const override { return bIsSourceControlled; }
 	virtual bool IsAdded() const override { return bIsAdded; }
 	virtual bool IsDeleted() const override { return bIsDeleted; }
-	// "pathIgnore" maps to "new, addable file" (see ParseStatusResults) - never surfaced as ignored.
-	virtual bool IsIgnored() const override { return false; }
+	virtual bool IsIgnored() const override { return bIsIgnored; }
 	// Lore locks are advisory only - files stay editable regardless of checkout state.
 	virtual bool CanEdit() const override { return true; }
 	virtual bool CanDelete() const override { return true; }
 	virtual bool IsUnknown() const override { return bIsUnknown; }
 	virtual bool IsModified() const override { return bIsModified; }
 	virtual bool CanAdd() const override { return bCanAdd; }
-	virtual bool CanRevert() const override { return IsModified() || IsCheckedOut() || IsAdded(); }
+	virtual bool IsConflicted() const override { return bIsConflicted; }
+	virtual bool CanRevert() const override { return IsModified() || IsCheckedOut() || IsAdded() || IsDeleted(); }
 
 	// Extra data we track
 	FString LocalFilename;
@@ -66,7 +66,10 @@ public:
 	bool bIsSourceControlled = false;
 	bool bIsAdded = false;
 	bool bIsDeleted = false;
+	bool bIsIgnored = false;
 	bool bIsModified = false;
+	bool bIsConflicted = false;
+	bool bIsStaged = false;
 	bool bIsCheckedOut = false;
 	bool bIsCheckedOutOther = false;
 	FString CheckedOutOther;

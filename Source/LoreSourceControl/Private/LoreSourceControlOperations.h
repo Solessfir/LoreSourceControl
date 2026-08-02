@@ -4,9 +4,55 @@
 
 #include "CoreMinimal.h"
 #include "ILoreSourceControlWorker.h"
+#include "SourceControlOperationBase.h"
 
 class FLoreSourceControlState;
 class FLoreSourceControlProvider;
+struct FLoreBranchInfo;
+
+/** Internal operation used to serialize a human-readable console status with all other Lore work. */
+class FLorePrintStatusOperation : public FSourceControlOperationBase
+{
+public:
+	virtual FName GetName() const override { return "LorePrintStatus"; }
+	virtual FText GetInProgressString() const override { return NSLOCTEXT("LoreSourceControl", "PrintingStatus", "Reading Lore status..."); }
+};
+
+/** Internal operation used to refresh the branch menu without unmanaged fire-and-forget tasks. */
+class FLoreRefreshBranchesOperation : public FSourceControlOperationBase
+{
+public:
+	virtual FName GetName() const override { return "LoreRefreshBranches"; }
+	virtual FText GetInProgressString() const override { return NSLOCTEXT("LoreSourceControl", "RefreshingBranches", "Refreshing Lore branches..."); }
+};
+
+/** Internal operation for a non-blocking branch switch. */
+class FLoreSwitchBranchOperation : public FSourceControlOperationBase
+{
+public:
+	enum class EOutcome : uint8
+	{
+		Success,
+		StagedStateBlocked,
+		Failed
+	};
+
+	explicit FLoreSwitchBranchOperation(FString InBranchName)
+		: BranchName(MoveTemp(InBranchName))
+	{
+	}
+
+	virtual FName GetName() const override { return "LoreSwitchBranch"; }
+	virtual FText GetInProgressString() const override { return NSLOCTEXT("LoreSourceControl", "SwitchingBranch", "Switching Lore branch..."); }
+
+	const FString& GetBranchName() const { return BranchName; }
+	EOutcome GetOutcome() const { return Outcome; }
+	void SetOutcome(EOutcome InOutcome) { Outcome = InOutcome; }
+
+private:
+	FString BranchName;
+	EOutcome Outcome = EOutcome::Failed;
+};
 
 /** Connect / initialize */
 class FLoreConnectWorker : public ILoreSourceControlWorker
@@ -45,9 +91,8 @@ public:
 
 	/** True if sync touched Source/Config/.uplugin/.uproject - needs an editor restart, no auto-reload */
 	bool bRequiresRestart = false;
+	bool bSyncSucceeded = false;
 
-	/** Captured on the game thread during Execute() so UpdateStates() can trigger a Content reload */
-	FLoreSourceControlProvider* Provider = nullptr;
 };
 
 /** UpdateStatus */
@@ -114,4 +159,38 @@ public:
 	virtual bool UpdateStates() const override;
 
 	TArray<FLoreSourceControlState> States;
+};
+
+class FLorePrintStatusWorker : public ILoreSourceControlWorker
+{
+public:
+	virtual FName GetName() const override { return "LorePrintStatus"; }
+	virtual bool Execute(FLoreSourceControlCommand& InCommand) override;
+	virtual bool UpdateStates() const override { return false; }
+};
+
+class FLoreRefreshBranchesWorker : public ILoreSourceControlWorker
+{
+public:
+	virtual FName GetName() const override { return "LoreRefreshBranches"; }
+	virtual bool Execute(FLoreSourceControlCommand& InCommand) override;
+	virtual bool UpdateStates() const override;
+
+private:
+	TArray<FLoreBranchInfo> Branches;
+	bool bApplyBranches = false;
+};
+
+class FLoreSwitchBranchWorker : public ILoreSourceControlWorker
+{
+public:
+	virtual FName GetName() const override { return "LoreSwitchBranch"; }
+	virtual bool Execute(FLoreSourceControlCommand& InCommand) override;
+	virtual bool UpdateStates() const override;
+
+private:
+	TArray<FLoreSourceControlState> States;
+	TArray<FString> ChangedContentPaths;
+	bool bSwitchSucceeded = false;
+	bool bRequiresRestart = false;
 };

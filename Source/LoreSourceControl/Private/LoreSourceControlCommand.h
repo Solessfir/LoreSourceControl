@@ -74,6 +74,12 @@ public:
 	/** Whether the command succeeded */
 	bool bCommandSuccessful;
 
+	/** Settings snapshot captured on the game thread; UObject settings must not be read by workers. */
+	bool bShouldLockFiles = true;
+
+	/** True once the provider has submitted this FIFO entry to the engine thread pool. */
+	bool bDispatched = false;
+
 	/** Set (atomically) once the pool thread has finished DoWork(); polled by the game thread */
 	volatile int32 bExecuteProcessed;
 };

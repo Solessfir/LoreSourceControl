@@ -100,6 +100,11 @@ FText FLoreSourceControlState::GetDisplayName() const
 		return FText::FromString(TEXT("Conflicted"));
 	}
 
+	if (bIsCheckedOutOther)
+	{
+		return FText::FromString(TEXT("Checked Out by Other User"));
+	}
+
 	if (IsCheckedOut())
 	{
 		return FText::FromString(TEXT("Checked Out"));
@@ -110,9 +115,19 @@ FText FLoreSourceControlState::GetDisplayName() const
 		return FText::FromString(TEXT("Added"));
 	}
 
+	if (IsDeleted())
+	{
+		return FText::FromString(TEXT("Deleted"));
+	}
+
 	if (IsModified())
 	{
 		return FText::FromString(TEXT("Modified"));
+	}
+
+	if (IsIgnored())
+	{
+		return FText::FromString(TEXT("Ignored"));
 	}
 
 	if (!IsCurrent())
@@ -148,9 +163,17 @@ FText FLoreSourceControlState::GetDisplayTooltip() const
 	{
 		Tooltip = TEXT("Added, pending commit");
 	}
+	else if (IsDeleted())
+	{
+		Tooltip = TEXT("Deleted, pending commit");
+	}
 	else if (IsModified())
 	{
 		Tooltip = TEXT("Modified locally");
+	}
+	else if (IsIgnored())
+	{
+		Tooltip = TEXT("Ignored by Lore");
 	}
 	else if (IsSourceControlled())
 	{

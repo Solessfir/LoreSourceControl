@@ -4,16 +4,20 @@
 
 #include "Widgets/SCompoundWidget.h"
 
+class FLoreSourceControlProvider;
+
 class SLoreSourceControlSettings : public SCompoundWidget
 {
 public:
 
 	SLATE_BEGIN_ARGS(SLoreSourceControlSettings) {}
+		SLATE_ARGUMENT(FLoreSourceControlProvider*, Provider)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
 
 private:
+	FLoreSourceControlProvider* Provider = nullptr;
 
 	/** Get the configured (or auto) lore binary path for display/picker */
 	FString GetBinaryPathString() const;

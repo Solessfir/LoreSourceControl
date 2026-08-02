@@ -23,6 +23,9 @@ struct FLoreStatusSummary
 
 	/** The remote is ahead of (or has diverged from) the local branch - a sync is needed */
 	bool bIsRemoteAhead = false;
+
+	/** The local branch contains commits that have not been published yet. */
+	bool bIsLocalAhead = false;
 };
 
 namespace FLoreSourceControlUtils
@@ -71,7 +74,7 @@ namespace FLoreSourceControlUtils
 	 * this can run on a background thread, where looking the provider up via FModuleManager/ISourceControlModule
 	 * has raced the game thread and deadlocked (observed hanging indefinitely on new-asset creation).
 	 */
-	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates);
+	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates);
 
 	/**
 	 * Parser for lore status --json output. Populates per-file states and, if OutSummary is given,
@@ -95,7 +98,7 @@ namespace FLoreSourceControlUtils
 	 * Run `lore branch switch <name>` to switch the working copy to a different branch.
 	 * Caller is responsible for warning the user beforehand - this changes files on disk.
 	 */
-	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages);
+	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages, TArray<FString>* OutChangedPaths = nullptr);
 
 	/**
 	 * Run `lore branch diff <target>` (current branch vs. target) and collect the repository-relative
@@ -123,7 +126,10 @@ namespace FLoreSourceControlUtils
 	 * Unlike "lock status", this needs no file list - it lists every locked path in one call,
 	 * which is what both a broad refresh and a single-file one actually need.
 	 */
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy);
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
+
+	/** Return every staged file in the repository, as normalized absolute paths. */
+	bool RunGetStagedFiles(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutErrorMessages);
 
 	/**
 	 * Settings using UDeveloperSettings (Project Settings > Editor > Lore Source Control).
@@ -150,7 +156,7 @@ namespace FLoreSourceControlUtils
 	/**
 	 * Update the provider's cached states from worker results.
 	 */
-	bool UpdateCachedStates(const TArray<FLoreSourceControlState>& InStates);
+	bool UpdateCachedStates(FLoreSourceControlProvider* InProvider, const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths, bool bApplyResults);
 
 	/**
 	 * Retrieve the name of the currently active branch.

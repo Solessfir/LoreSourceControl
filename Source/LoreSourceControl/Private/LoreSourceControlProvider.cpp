@@ -2,6 +2,7 @@
 
 #include "LoreSourceControlProvider.h"
 #include "LoreSourceControlCommand.h"
+#include "LoreSourceControlOperations.h"
 #include "LoreSourceControlUtils.h"
 #include "SourceControlOperations.h"
 #include "SourceControlHelpers.h"
@@ -9,8 +10,6 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
 #include "Misc/QueuedThreadPool.h"
-#include "Async/Async.h"
-#include "Misc/MessageDialog.h"
 #include "Logging/MessageLog.h"
 #include "PackageTools.h"
 #include "Misc/PackageName.h"
@@ -52,7 +51,7 @@ void FLoreSourceControlProvider::Close()
 	// so none of them outlive us or leak.
 	for (FLoreSourceControlCommand* Command : CommandQueue)
 	{
-		if (!GThreadPool || !GThreadPool->RetractQueuedWork(Command))
+		if (Command->bDispatched && (!GThreadPool || !GThreadPool->RetractQueuedWork(Command)))
 		{
 			while (!Command->bExecuteProcessed)
 			{
@@ -66,6 +65,7 @@ void FLoreSourceControlProvider::Close()
 	StateCache.Empty();
 
 	bHasChangesToSync = false;
+	bHasChangesToPush = false;
 	BranchName.Empty();
 }
 
@@ -80,6 +80,10 @@ FText FLoreSourceControlProvider::GetStatusText() const
 	Args.Add(TEXT("Identity"), FText::FromString(Identity.IsEmpty() ? TEXT("(not configured)") : Identity));
 
 	FText Base = FText::Format(LOCTEXT("LoreStatus", "Local repository: {Root}\nRemote origin: {RemoteUrl}\nBranch: {Branch}\nUser: {Identity}"), Args);
+	if (bHasChangesToPush)
+	{
+		Base = FText::Format(LOCTEXT("LoreStatusLocalAhead", "{0}\nOutgoing commits: yes (publish required)"), Base);
+	}
 
 	if (!bLoreAvailable)
 	{
@@ -94,9 +98,10 @@ FText FLoreSourceControlProvider::GetStatusText() const
 
 TMap<ISourceControlProvider::EStatus, FString> FLoreSourceControlProvider::GetStatus() const
 {
+	FScopeLock Lock(&CriticalSection);
 	TMap<EStatus, FString> Result;
-	Result.Add(EStatus::Enabled, IsEnabled() ? TEXT("Yes") : TEXT("No"));
-	Result.Add(EStatus::Connected, IsAvailable() ? TEXT("Yes") : TEXT("No"));
+	Result.Add(EStatus::Enabled, TEXT("Yes"));
+	Result.Add(EStatus::Connected, bLoreAvailable && bLoreRepositoryFound ? TEXT("Yes") : TEXT("No"));
 	Result.Add(EStatus::ScmVersion, TEXT("lore (Epic)"));
 	Result.Add(EStatus::PluginVersion, TEXT("0.1"));
 	Result.Add(EStatus::WorkspacePath, PathToRepositoryRoot);
@@ -130,6 +135,7 @@ const FName& FLoreSourceControlProvider::GetName() const
 ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
 {
 	TArray<FString> AbsoluteFiles = SourceControlHelpers::AbsoluteFilenames(InFiles);
+	ECommandResult::Type UpdateResult = ECommandResult::Succeeded;
 
 	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate)
 	{
@@ -137,7 +143,7 @@ ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>&
 		// worker finishes - and that worker needs CriticalSection too (e.g. to read/set the branch
 		// name). Must not hold the lock across this call or the two threads deadlock on it.
 		TSharedRef<FUpdateStatus> UpdateStatusOperation = ISourceControlOperation::Create<FUpdateStatus>();
-		Execute(UpdateStatusOperation, AbsoluteFiles);
+		UpdateResult = Execute(UpdateStatusOperation, AbsoluteFiles);
 	}
 
 	FScopeLock ScopeLock(&CriticalSection);
@@ -176,12 +182,12 @@ ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>&
 			{
 				NewState.bIsUnknown = true;
 			}
-			NewState.SetBranchName(GetBranchName());
+			NewState.SetBranchName(BranchName);
 			OutState.Add(MakeShareable(new FLoreSourceControlState(NewState)));
 		}
 	}
 
-	return ECommandResult::Succeeded;
+	return UpdateResult;
 }
 
 ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
@@ -229,9 +235,10 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 	// A file outside our repository (e.g. Engine/Content) can't be queried by lore - it errors
 	// "invalid path" and fails the whole batch, which took down "Submit Content" and similar ops
 	// that gather every loaded package regardless of origin. Silently drop those instead.
-	if (!PathToRepositoryRoot.IsEmpty())
+	const FString RepositoryRoot = GetRepositoryRoot();
+	if (!RepositoryRoot.IsEmpty())
 	{
-		FString NormRoot = PathToRepositoryRoot;
+		FString NormRoot = RepositoryRoot;
 		FPaths::NormalizeDirectoryName(NormRoot);
 		if (!NormRoot.EndsWith(TEXT("/")))
 		{
@@ -256,20 +263,6 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 		}
 	}
 
-	// Lore never rejects a commit/push from someone who skipped locking (see docs/faq.md) - the
-	// server will not stop this for us, so a file locked by someone else is left out of the submit
-	// entirely rather than asking "commit anyway?": you can keep it writable and testing locally all
-	// day, it just never gets staged/committed by us until that lock clears.
-	if (InOperation->GetName() == "CheckIn" && FLoreSourceControlUtils::ShouldLockFiles())
-	{
-		AbsoluteFiles = FilterOutOtherLockedFiles(AbsoluteFiles);
-		if (AbsoluteFiles.Num() == 0 && InFiles.Num() > 0)
-		{
-			InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Cancelled);
-			return ECommandResult::Cancelled;
-		}
-	}
-
 	TSharedPtr<ILoreSourceControlWorker> Worker = CreateWorker(InOperation->GetName());
 	if (!Worker.IsValid())
 	{
@@ -286,9 +279,11 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 
 	FLoreSourceControlCommand* Command = new FLoreSourceControlCommand(InOperation, Worker.ToSharedRef());
 	Command->Provider = this;
+	Command->Worker->Provider = this;
 	Command->Files = AbsoluteFiles;
 	Command->PathToLoreBinary = GetLoreBinaryPath();
-	Command->PathToRepositoryRoot = PathToRepositoryRoot;
+	Command->PathToRepositoryRoot = RepositoryRoot;
+	Command->bShouldLockFiles = FLoreSourceControlUtils::ShouldLockFiles();
 	Command->OperationCompleteDelegate = InOperationCompleteDelegate;
 
 	if (InConcurrency == EConcurrency::Synchronous)
@@ -419,12 +414,12 @@ void FLoreSourceControlProvider::Tick()
 {
 	bool bStatesUpdated = false;
 
-	for (int32 CommandIndex = 0; CommandIndex < CommandQueue.Num(); ++CommandIndex)
+	if (!CommandQueue.IsEmpty())
 	{
-		FLoreSourceControlCommand& Command = *CommandQueue[CommandIndex];
+		FLoreSourceControlCommand& Command = *CommandQueue[0];
 		if (Command.bExecuteProcessed)
 		{
-			CommandQueue.RemoveAt(CommandIndex);
+			CommandQueue.RemoveAt(0);
 
 			bStatesUpdated |= Command.Worker->UpdateStates();
 
@@ -437,9 +432,7 @@ void FLoreSourceControlProvider::Tick()
 				delete &Command;
 			}
 
-			// Only process one completed command per tick: the completion delegate above may
-			// itself touch CommandQueue (e.g. issuing a follow-up operation).
-			break;
+			TryDispatchNextCommand();
 		}
 	}
 
@@ -462,7 +455,8 @@ TArray<FSourceControlChangelistRef> FLoreSourceControlProvider::GetChangelists(E
 #if SOURCE_CONTROL_WITH_SLATE
 TSharedRef<SWidget> FLoreSourceControlProvider::MakeSettingsWidget() const
 {
-	return SNew(SLoreSourceControlSettings);
+	return SNew(SLoreSourceControlSettings)
+		.Provider(const_cast<FLoreSourceControlProvider*>(this));
 }
 #endif
 
@@ -564,6 +558,7 @@ void FLoreSourceControlProvider::CheckRepositoryStatus()
 		RemoteUrl.Empty();
 		Identity.Empty();
 		bHasChangesToSync = false;
+		bHasChangesToPush = false;
 	}
 }
 
@@ -619,8 +614,8 @@ ECommandResult::Type FLoreSourceControlProvider::IssueCommand(FLoreSourceControl
 {
 	if (GThreadPool)
 	{
-		GThreadPool->AddQueuedWork(&InCommand);
 		CommandQueue.Add(&InCommand);
+		TryDispatchNextCommand();
 		return ECommandResult::Succeeded;
 	}
 
@@ -643,6 +638,21 @@ ECommandResult::Type FLoreSourceControlProvider::IssueCommand(FLoreSourceControl
 	return Result;
 }
 
+void FLoreSourceControlProvider::TryDispatchNextCommand()
+{
+	if (!GThreadPool || CommandQueue.IsEmpty())
+	{
+		return;
+	}
+
+	FLoreSourceControlCommand* Command = CommandQueue[0];
+	if (!Command->bDispatched)
+	{
+		Command->bDispatched = true;
+		GThreadPool->AddQueuedWork(Command);
+	}
+}
+
 void FLoreSourceControlProvider::OutputCommandMessages(const FLoreSourceControlCommand& InCommand)
 {
 	FMessageLog SourceControlLog("SourceControl");
@@ -656,55 +666,6 @@ void FLoreSourceControlProvider::OutputCommandMessages(const FLoreSourceControlC
 	{
 		SourceControlLog.Info(FText::FromString(InfoMessage));
 	}
-}
-
-TArray<FString> FLoreSourceControlProvider::FilterOutOtherLockedFiles(const TArray<FString>& InFiles)
-{
-	TArray<FString> Filtered;
-	TArray<FString> ExcludedFiles;
-	Filtered.Reserve(InFiles.Num());
-
-	FString ExcludedList;
-	{
-		FScopeLock Lock(&CriticalSection);
-		for (const FString& File : InFiles)
-		{
-			const FLoreSourceControlState* State = StateCache.Find(File);
-			FString Who;
-			if (State && State->IsCheckedOutOther(&Who))
-			{
-				ExcludedFiles.Add(File);
-				ExcludedList += FString::Printf(TEXT("\n%s (locked by %s)"), *FPaths::GetCleanFilename(File), Who.IsEmpty() ? TEXT("someone else") : *Who);
-			}
-			else
-			{
-				Filtered.Add(File);
-			}
-		}
-	}
-
-#if SOURCE_CONTROL_WITH_SLATE
-	if (!ExcludedFiles.IsEmpty())
-	{
-		const EAppReturnType::Type Choice = FMessageDialog::Open(
-			EAppMsgType::YesNo,
-			FText::Format(
-				LOCTEXT("ExcludedOtherLockedFiles",
-					"The following file(s) are locked by someone else, you're not allowed to commit locked files.\n{0}\n\n"
-					"If you don't need your local changes to them, revert them now? "
-					"(No leaves them as they are - you can revert manually later via Source Control > Revert.)"),
-				FText::FromString(ExcludedList)
-			)
-		);
-
-		if (Choice == EAppReturnType::Yes)
-		{
-			Execute(ISourceControlOperation::Create<FRevert>(), ExcludedFiles, EConcurrency::Asynchronous);
-		}
-	}
-#endif
-
-	return Filtered;
 }
 
 bool FLoreSourceControlProvider::TryGetStateFromCache(const FString& Filename, FLoreSourceControlState& OutState) const
@@ -730,6 +691,51 @@ void FLoreSourceControlProvider::AddStatesToCache(const TArray<FLoreSourceContro
 		}
 		StateCache.Add(Copy.LocalFilename, MoveTemp(Copy));
 	}
+}
+
+void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths)
+{
+	FScopeLock Lock(&CriticalSection);
+
+	for (const FString& ScanPath : InScanPaths)
+	{
+		FString NormalizedPath = FPaths::ConvertRelativePathToFull(ScanPath);
+		FPaths::NormalizeFilename(NormalizedPath);
+		NormalizedPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+
+		const bool bDirectoryScope = FPaths::DirectoryExists(NormalizedPath);
+		FString DirectoryPrefix = NormalizedPath;
+		if (bDirectoryScope && !DirectoryPrefix.EndsWith(TEXT("/")))
+		{
+			DirectoryPrefix += TEXT("/");
+		}
+
+		for (auto It = StateCache.CreateIterator(); It; ++It)
+		{
+			const bool bExactMatch = It.Key().Equals(NormalizedPath, ESearchCase::IgnoreCase);
+			const bool bWithinDirectory = bDirectoryScope && It.Key().StartsWith(DirectoryPrefix, ESearchCase::IgnoreCase);
+			if (bExactMatch || bWithinDirectory)
+			{
+				It.RemoveCurrent();
+			}
+		}
+	}
+
+	for (const FLoreSourceControlState& State : InStates)
+	{
+		FLoreSourceControlState Copy = State;
+		if (!BranchName.IsEmpty())
+		{
+			Copy.SetBranchName(BranchName);
+		}
+		StateCache.Add(Copy.LocalFilename, MoveTemp(Copy));
+	}
+}
+
+void FLoreSourceControlProvider::ClearStateCache()
+{
+	FScopeLock Lock(&CriticalSection);
+	StateCache.Empty();
 }
 
 bool FLoreSourceControlProvider::RemoveStateFromCache(const FString& Filename)
@@ -828,96 +834,19 @@ int32 FLoreSourceControlProvider::GetCachedBranchCount() const
 	return CachedBranchCount;
 }
 
+void FLoreSourceControlProvider::SetCachedBranches(const TArray<FLoreBranchInfo>& InBranches)
+{
+	FScopeLock Lock(&CriticalSection);
+	CachedBranches = InBranches;
+	CachedBranchCount = InBranches.Num();
+}
+
 void FLoreSourceControlProvider::RefreshBranchesAsync()
 {
-	FString LocalBinary;
-	FString LocalRoot;
+	if (IsAvailable())
 	{
-		FScopeLock Lock(&CriticalSection);
-		LocalBinary = LoreBinaryPath;
-		LocalRoot = PathToRepositoryRoot;
+		Execute(ISourceControlOperation::Create<FLoreRefreshBranchesOperation>(), TArray<FString>(), EConcurrency::Asynchronous);
 	}
-
-	TWeakPtr<uint8> WeakAlive = AliveMarker;
-	Async(EAsyncExecution::ThreadPool, [this, WeakAlive, LocalBinary, LocalRoot]()
-	{
-		TArray<FLoreBranchInfo> Branches;
-		FLoreSourceControlUtils::RunGetBranches(LocalBinary, LocalRoot, Branches);
-
-		AsyncTask(ENamedThreads::GameThread, [this, WeakAlive, Branches]()
-		{
-			// Provider destroyed (module shutdown) while the fetch was in flight - don't touch it.
-			if (!WeakAlive.IsValid())
-			{
-				return;
-			}
-
-			FScopeLock Lock(&CriticalSection);
-			CachedBranches = Branches;
-			CachedBranchCount = Branches.Num();
-		});
-	});
-}
-
-bool FLoreSourceControlProvider::DoesBranchSwitchTouchCode(const FString& InTargetBranch, TArray<FString>& OutChangedContentPaths) const
-{
-	FString LocalBinary;
-	FString LocalRoot;
-	{
-		FScopeLock Lock(&CriticalSection);
-		LocalBinary = LoreBinaryPath;
-		LocalRoot = PathToRepositoryRoot;
-	}
-
-	TArray<FString> ChangedPaths;
-	TArray<FString> Errors;
-	if (!FLoreSourceControlUtils::RunGetBranchDiff(LocalBinary, LocalRoot, InTargetBranch, ChangedPaths, Errors))
-	{
-		// Could not determine what actually changed - assume the risky case.
-		return true;
-	}
-
-	return FLoreSourceControlUtils::ClassifyChangedPaths(ChangedPaths, OutChangedContentPaths);
-}
-
-FLoreSourceControlProvider::ELoreSwitchResult FLoreSourceControlProvider::SwitchBranch(const FString& InBranchName)
-{
-	FString LocalBinary;
-	FString LocalRoot;
-	{
-		FScopeLock Lock(&CriticalSection);
-		LocalBinary = LoreBinaryPath;
-		LocalRoot = PathToRepositoryRoot;
-	}
-
-	TArray<FString> Errors;
-	bool bOk = FLoreSourceControlUtils::RunSwitchBranch(LocalBinary, LocalRoot, InBranchName, Errors);
-
-	if (!bOk)
-	{
-		bool bStagedStateBlocked = false;
-		for (const FString& Error : Errors)
-		{
-			FMessageLog("SourceControl").Error(FText::FromString(Error));
-			if (Error.Contains(TEXT("staged state")))
-			{
-				bStagedStateBlocked = true;
-			}
-		}
-		return bStagedStateBlocked ? ELoreSwitchResult::StagedStateBlocked : ELoreSwitchResult::Failed;
-	}
-
-	// The switch just changed files on disk out from under the working copy - the cache is stale
-	// and any loaded assets need to be reloaded, which the caller handles based on DoesBranchSwitchTouchCode.
-	{
-		FScopeLock Lock(&CriticalSection);
-		StateCache.Empty();
-	}
-
-	UpdateCurrentBranchName();
-	BroadcastStateChanged();
-
-	return ELoreSwitchResult::Success;
 }
 
 void FLoreSourceControlProvider::ReloadContentPackages(const TArray<FString>& InChangedRelativePaths) const
@@ -966,6 +895,12 @@ void FLoreSourceControlProvider::SetHasChangesToSync(const bool bInHasChanges)
 {
 	FScopeLock Lock(&CriticalSection);
 	bHasChangesToSync = bInHasChanges;
+}
+
+void FLoreSourceControlProvider::SetHasChangesToPush(const bool bInHasChanges)
+{
+	FScopeLock Lock(&CriticalSection);
+	bHasChangesToPush = bInHasChanges;
 }
 
 #undef LOCTEXT_NAMESPACE

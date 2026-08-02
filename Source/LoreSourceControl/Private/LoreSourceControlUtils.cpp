@@ -9,9 +9,8 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
-#include "Modules/ModuleManager.h"
 #include "UObject/UObjectGlobals.h"
-#include "Json.h"
+#include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SoftObjectPath.h"
@@ -66,6 +65,7 @@ namespace FLoreSourceControlUtils
 			{
 				Home = FPlatformProcess::UserDir();
 			}
+
 			if (!Home.IsEmpty())
 			{
 				Paths.Add(FPaths::Combine(Home, TEXT(".local/bin/"), BinaryName));
@@ -81,6 +81,7 @@ namespace FLoreSourceControlUtils
 			{
 				Home = FPlatformProcess::UserDir();
 			}
+
 			if (!Home.IsEmpty())
 			{
 				Paths.Add(FPaths::Combine(Home, TEXT(".local/bin/"), BinaryName));
@@ -374,7 +375,7 @@ namespace FLoreSourceControlUtils
 		return ReturnCode == 0;
 	}
 
-	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates)
+	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates)
 	{
 		TArray<FString> Results;
 		TArray<FString> Params;
@@ -402,13 +403,27 @@ namespace FLoreSourceControlUtils
 			// fact lore reports on every status call, never narrowed to the files actually scanned -
 			// unlike per-file dirty state (see FLoreSourceControlProvider::HasChangesToCheckIn).
 			InProvider.SetHasChangesToSync(Summary.bIsRemoteAhead);
+			InProvider.SetHasChangesToPush(Summary.bIsLocalAhead);
+		}
+
+		if (!bSuccess)
+		{
+			return false;
+		}
+
+		if (!bQueryLocks)
+		{
+			return true;
 		}
 
 		// Also query locks and merge in. A locked-but-unmodified file has no entry in OutStates yet
 		// (locking alone doesn't change content, so --scan never flagged it dirty) - synthesize a
 		// clean+checked-out state for any lock without a match, or its checkout icon never shows.
 		TMap<FString, FString> LockedBy;
-		GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy);
+		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages))
+		{
+			return false;
+		}
 
 		// "lock query" reports the owner as a raw user id - our own id is the repository's configured
 		// identity (.lore/config.toml), so compare against that; "me"/"self" kept as fallbacks.
@@ -416,11 +431,11 @@ namespace FLoreSourceControlUtils
 
 		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FString& Owner)
 		{
-			State.bIsCheckedOut = true;
-
 			// "<unknown>" means lore's server couldn't resolve who acquired the lock (no auth endpoint configured, or an unresolvable token)
-			const bool bOther = Owner != TEXT("me") && Owner != TEXT("self")
-				&& (OwnIdentity.IsEmpty() || Owner != OwnIdentity);
+			const bool bOther = !Owner.Equals(TEXT("me"), ESearchCase::IgnoreCase)
+				&& !Owner.Equals(TEXT("self"), ESearchCase::IgnoreCase)
+				&& (OwnIdentity.IsEmpty() || !Owner.Equals(OwnIdentity, ESearchCase::IgnoreCase));
+			State.bIsCheckedOut = !bOther;
 			State.bIsCheckedOutOther = bOther;
 			if (bOther)
 			{
@@ -451,7 +466,7 @@ namespace FLoreSourceControlUtils
 			OutStates.Add(State);
 		}
 
-		return bSuccess;
+		return true;
 	}
 
 	void ParseStatusResults(const FString& InResults, const TArray<FString>& InFiles, const FString& InRepositoryRoot, TArray<FLoreSourceControlState>& OutStates, FLoreStatusSummary* OutSummary)
@@ -464,12 +479,19 @@ namespace FLoreSourceControlUtils
 
 		const FString RepoAbs = FPaths::ConvertRelativePathToFull(InRepositoryRoot);
 
-		// Map from absolute path to status prefix for dirty files
-		TMap<FString, FString> DirtyMap;
+		struct FParsedFileStatus
+		{
+			FString Action;
+			FString FromPath;
+			FString Type;
+			bool bDirty = false;
+			bool bStaged = false;
+			bool bConflicted = false;
+		};
 
-		// Paths lore reported via "pathIgnore" - how a never-staged file (e.g. a brand new asset) comes
-		// back, since lore has nothing dirty to report for it. Without this we'd fall through to the
-		// "clean, already-tracked" default below, making new assets look checkout-able instead of add-able.
+		TMap<FString, FParsedFileStatus> FileStatuses;
+
+		// pathIgnore means Lore intentionally excludes the path; it must not be offered for add.
 		TSet<FString> IgnoredPaths;
 
 		for (const FString& Line : Lines)
@@ -503,16 +525,21 @@ namespace FLoreSourceControlUtils
 					FPaths::NormalizeFilename(JAbs);
 					JAbs = JAbs.Replace(TEXT("\\"), TEXT("/"));
 
-					bool bFlagDirty = false;
-					Data->TryGetBoolField(TEXT("flagDirty"), bFlagDirty);
+					FParsedFileStatus& Status = FileStatuses.FindOrAdd(JAbs);
+					Data->TryGetBoolField(TEXT("flagDirty"), Status.bDirty);
+					Data->TryGetBoolField(TEXT("flagStaged"), Status.bStaged);
 
-					FString JAction;
-					Data->TryGetStringField(TEXT("action"), JAction);
+					bool bConflict = false;
+					bool bConflictUnresolved = false;
+					Data->TryGetBoolField(TEXT("flagConflict"), bConflict);
+					Data->TryGetBoolField(TEXT("flagConflictUnresolved"), bConflictUnresolved);
+					Status.bConflicted = bConflict || bConflictUnresolved;
 
-					if (bFlagDirty || JAction == TEXT("Modify") || JAction == TEXT("Add") || JAction == TEXT("Delete") || JAction == TEXT("Move"))
-					{
-						DirtyMap.Add(JAbs, JAction.IsEmpty() ? TEXT("M") : JAction.Left(1));
-					}
+					Data->TryGetStringField(TEXT("action"), Status.Action);
+					Status.Action.ToLowerInline();
+					Data->TryGetStringField(TEXT("fromPath"), Status.FromPath);
+					Data->TryGetStringField(TEXT("type"), Status.Type);
+					Status.Type.ToLowerInline();
 				}
 			}
 			else if (TagName == TEXT("pathIgnore"))
@@ -533,11 +560,16 @@ namespace FLoreSourceControlUtils
 					OutSummary->BranchName = Name;
 				}
 
-				// Serialized as a number (u8, 0 or 1) - never as a JSON bool.
-				int32 RemoteAhead = 0;
-				if (Data->TryGetNumberField(TEXT("isRemoteAhead"), RemoteAhead) && RemoteAhead != 0)
+				bool bRemoteAhead = false;
+				if (Data->TryGetBoolField(TEXT("isRemoteAhead"), bRemoteAhead))
 				{
-					OutSummary->bIsRemoteAhead = true;
+					OutSummary->bIsRemoteAhead = bRemoteAhead;
+				}
+
+				bool bLocalAhead = false;
+				if (Data->TryGetBoolField(TEXT("isLocalAhead"), bLocalAhead))
+				{
+					OutSummary->bIsLocalAhead = bLocalAhead;
 				}
 			}
 		}
@@ -546,20 +578,34 @@ namespace FLoreSourceControlUtils
 		// requested": a directory-scoped scan (e.g. Sync/Connect warming the cache) passes that
 		// directory as the sole entry in InFiles, so keying off InFiles would collapse the whole
 		// recursive scan into one bogus per-directory state instead of real per-file results.
-		for (const auto& Pair : DirtyMap)
+		for (const auto& Pair : FileStatuses)
 		{
+			const FParsedFileStatus& Parsed = Pair.Value;
+			if (Parsed.Type == TEXT("directory")
+				|| (!Parsed.bDirty && !Parsed.bStaged && !Parsed.bConflicted && Parsed.Action.IsEmpty()))
+			{
+				continue;
+			}
+
 			FLoreSourceControlState State(Pair.Key);
 			State.bIsSourceControlled = true;
-			const FString& Prefix = Pair.Value;
+			State.bIsStaged = Parsed.bStaged;
+			State.bIsConflicted = Parsed.bConflicted;
 
-			if (Prefix == TEXT("A") || Prefix == TEXT("?"))
+			if (Parsed.Action == TEXT("add") || Parsed.Action == TEXT("copy"))
 			{
 				State.bIsAdded = true;
 				State.bCanCheckIn = true;
 			}
-			else if (Prefix == TEXT("D"))
+			else if (Parsed.Action == TEXT("delete"))
 			{
 				State.bIsDeleted = true;
+				State.bCanCheckIn = true;
+			}
+			else if (Parsed.Action == TEXT("move"))
+			{
+				State.bIsAdded = true;
+				State.bCanCheckIn = true;
 			}
 			else
 			{
@@ -568,6 +614,20 @@ namespace FLoreSourceControlUtils
 			}
 
 			OutStates.Add(State);
+
+			if (Parsed.Action == TEXT("move") && !Parsed.FromPath.IsEmpty())
+			{
+				FString FromAbs = FPaths::Combine(RepoAbs, Parsed.FromPath);
+				FPaths::NormalizeFilename(FromAbs);
+				FromAbs = FromAbs.Replace(TEXT("\\"), TEXT("/"));
+
+				FLoreSourceControlState DeletedState(FromAbs);
+				DeletedState.bIsSourceControlled = true;
+				DeletedState.bIsDeleted = true;
+				DeletedState.bIsStaged = Parsed.bStaged;
+				DeletedState.bCanCheckIn = true;
+				OutStates.Add(DeletedState);
+			}
 		}
 
 		// Also emit an explicit state for any specifically-requested real file that the scan did not
@@ -579,7 +639,7 @@ namespace FLoreSourceControlUtils
 			FPaths::NormalizeFilename(AbsFile);
 			AbsFile = AbsFile.Replace(TEXT("\\"), TEXT("/"));
 
-			if (DirtyMap.Contains(AbsFile) || FPaths::DirectoryExists(AbsFile))
+			if (FileStatuses.Contains(AbsFile) || FPaths::DirectoryExists(AbsFile))
 			{
 				// Already covered above, or this was a directory scan target rather than a real file.
 				continue;
@@ -588,11 +648,7 @@ namespace FLoreSourceControlUtils
 			FLoreSourceControlState State(AbsFile);
 			if (IgnoredPaths.Contains(AbsFile))
 			{
-				// Lore reported this exact path as ignored, which in practice is what a brand new,
-				// never staged/committed file looks like (nothing dirty to report yet). Leave it as
-				// not-source-controlled/addable rather than "clean and tracked", or CanCheckout() would
-				// win over CanAdd() and the editor tries (and fails) to check out a file lore never heard of.
-				State.bCanAdd = true;
+				State.bIsIgnored = true;
 			}
 			else
 			{
@@ -757,13 +813,38 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages)
+	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages, TArray<FString>* OutChangedPaths)
 	{
 		TArray<FString> Params;
 		Params.Add(InBranchName);
 
 		TArray<FString> Results;
-		return RunLoreCommand(TEXT("branch switch"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, OutErrorMessages);
+		const bool bOk = RunLoreCommand(TEXT("branch switch"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, OutErrorMessages);
+		if (OutChangedPaths)
+		{
+			for (const FString& Line : Results)
+			{
+				TSharedPtr<FJsonObject> JsonObj;
+				if (!ParseJsonLine(Line.TrimStartAndEnd(), JsonObj))
+				{
+					continue;
+				}
+
+				FString TagName;
+				if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName) || TagName != TEXT("revisionSyncFile"))
+				{
+					continue;
+				}
+
+				const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
+				FString Path;
+				if (Data && Data->TryGetStringField(TEXT("path"), Path) && !Path.IsEmpty())
+				{
+					OutChangedPaths->AddUnique(Path);
+				}
+			}
+		}
+		return bOk;
 	}
 
 	bool RunGetBranchDiff(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InTargetBranch, TArray<FString>& OutChangedPaths, TArray<FString>& OutErrorMessages)
@@ -783,7 +864,8 @@ namespace FLoreSourceControlUtils
 			}
 
 			FString TagName;
-			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName) || TagName != TEXT("branchDiffChange"))
+			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName)
+				|| (TagName != TEXT("branchDiffChange") && TagName != TEXT("branchDiffConflict")))
 			{
 				continue;
 			}
@@ -794,16 +876,23 @@ namespace FLoreSourceControlUtils
 				continue;
 			}
 
-			const FJsonObject* Change = GetObjectField(*Data, TEXT("change"));
-			if (!Change)
+			auto AddChangePath = [&OutChangedPaths](const FJsonObject* Change)
 			{
-				continue;
-			}
+				FString Path;
+				if (Change && Change->TryGetStringField(TEXT("path"), Path) && !Path.IsEmpty())
+				{
+					OutChangedPaths.AddUnique(Path);
+				}
+			};
 
-			FString Path;
-			if (Change->TryGetStringField(TEXT("path"), Path) && !Path.IsEmpty())
+			if (TagName == TEXT("branchDiffChange"))
 			{
-				OutChangedPaths.Add(Path);
+				AddChangePath(GetObjectField(*Data, TEXT("change")));
+			}
+			else
+			{
+				AddChangePath(GetObjectField(*Data, TEXT("sourceChange")));
+				AddChangePath(GetObjectField(*Data, TEXT("targetChange")));
 			}
 		}
 
@@ -861,7 +950,7 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy)
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy, TArray<FString>* OutErrorMessages)
 	{
 		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the
 		// broad Connect/Sync scan passes) silently matches nothing. "lock query" filtered by --branch
@@ -878,8 +967,13 @@ namespace FLoreSourceControlUtils
 		}
 
 		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);
+		if (OutErrorMessages)
+		{
+			OutErrorMessages->Append(Errors);
+		}
 
 		FString RepoAbs = FPaths::ConvertRelativePathToFull(InRepositoryRoot);
+		TMap<FString, FString> OwnerNames;
 
 		for (const FString& Line : Results)
 		{
@@ -890,13 +984,30 @@ namespace FLoreSourceControlUtils
 			}
 
 			FString TagName;
-			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName) || TagName != TEXT("lockFileQuery"))
+			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName))
 			{
 				continue;
 			}
 
 			const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
 			if (!Data)
+			{
+				continue;
+			}
+
+			if (TagName == TEXT("authUserInfo"))
+			{
+				FString Id, Name;
+				Data->TryGetStringField(TEXT("id"), Id);
+				Data->TryGetStringField(TEXT("name"), Name);
+				if (!Id.IsEmpty() && !Name.IsEmpty())
+				{
+					OwnerNames.Add(Id, Name);
+				}
+				continue;
+			}
+
+			if (TagName != TEXT("lockFileQuery"))
 			{
 				continue;
 			}
@@ -911,6 +1022,59 @@ namespace FLoreSourceControlUtils
 				Abs = Abs.Replace(TEXT("\\"), TEXT("/"));
 				OutLockedBy.Add(Abs, Owner);
 			}
+		}
+
+		for (TPair<FString, FString>& Lock : OutLockedBy)
+		{
+			if (const FString* ResolvedName = OwnerNames.Find(Lock.Value))
+			{
+				Lock.Value = *ResolvedName;
+			}
+		}
+
+		return bOk;
+	}
+
+	bool RunGetStagedFiles(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutErrorMessages)
+	{
+		TArray<FString> Results;
+		const bool bOk = RunLoreCommand(TEXT("status"), InLoreBinary, InRepositoryRoot, TArray<FString>(), TArray<FString>(), Results, OutErrorMessages);
+
+		const FString RepoAbs = FPaths::ConvertRelativePathToFull(InRepositoryRoot);
+		for (const FString& Line : Results)
+		{
+			TSharedPtr<FJsonObject> JsonObj;
+			if (!ParseJsonLine(Line.TrimStartAndEnd(), JsonObj))
+			{
+				continue;
+			}
+
+			FString TagName;
+			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName) || TagName != TEXT("repositoryStatusFile"))
+			{
+				continue;
+			}
+
+			const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
+			if (!Data)
+			{
+				continue;
+			}
+
+			bool bStaged = false;
+			FString Type;
+			FString Path;
+			Data->TryGetBoolField(TEXT("flagStaged"), bStaged);
+			Data->TryGetStringField(TEXT("type"), Type);
+			Data->TryGetStringField(TEXT("path"), Path);
+			if (!bStaged || Type.Equals(TEXT("directory"), ESearchCase::IgnoreCase) || Path.IsEmpty())
+			{
+				continue;
+			}
+
+			FString AbsolutePath = FPaths::Combine(RepoAbs, Path);
+			FPaths::NormalizeFilename(AbsolutePath);
+			OutStagedFiles.AddUnique(AbsolutePath.Replace(TEXT("\\"), TEXT("/")));
 		}
 
 		return bOk;
@@ -973,12 +1137,14 @@ namespace FLoreSourceControlUtils
 		SetUserConfiguredLoreBinaryPath(InLoreBinaryPath);
 	}
 
-	bool UpdateCachedStates(const TArray<FLoreSourceControlState>& InStates)
+	bool UpdateCachedStates(FLoreSourceControlProvider* InProvider, const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths, bool bApplyResults)
 	{
-		const ISourceControlModule& SourceControlModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-		FLoreSourceControlProvider& Provider = static_cast<FLoreSourceControlProvider&>(SourceControlModule.GetProvider());
+		if (!InProvider || !bApplyResults)
+		{
+			return false;
+		}
 
-		Provider.AddStatesToCache(InStates);
+		InProvider->ReplaceStatesInCache(InStates, InScanPaths);
 
 		// Caller (FLoreSourceControlProvider::Tick) broadcasts once after UpdateStates() returns true.
 		return true;

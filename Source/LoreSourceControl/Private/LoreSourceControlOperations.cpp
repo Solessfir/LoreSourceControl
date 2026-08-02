@@ -48,6 +48,17 @@ static FString QuoteCommandLineArgument(const FString& InArg)
 	return FString::Printf(TEXT("\"%s\""), *Escaped);
 }
 
+static FString NormalizeComparisonPath(const FString& InPath)
+{
+	FString Result = FPaths::ConvertRelativePathToFull(InPath);
+	FPaths::NormalizeFilename(Result);
+	Result.ReplaceInline(TEXT("\\"), TEXT("/"));
+#if PLATFORM_WINDOWS
+	Result.ToLowerInline();
+#endif
+	return Result;
+}
+
 //-----------------------------------------------------------------------------
 // Connect
 //-----------------------------------------------------------------------------
@@ -56,8 +67,8 @@ bool FLoreConnectWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// Runs off the game thread (see FLoreSourceControlProvider::Init / IssueCommand). Must go through
 	// InCommand.Provider (captured on the game thread) rather than looking it up via FModuleManager/
 	// ISourceControlModule here - doing that from a pool thread has raced the game thread and deadlocked.
-	FLoreSourceControlProvider& Provider = *InCommand.Provider;
-	Provider.UpdateCurrentBranchName();
+	FLoreSourceControlProvider& LoreProvider = *InCommand.Provider;
+	LoreProvider.UpdateCurrentBranchName();
 
 	// Scan the whole Content tree once up front and warm the state cache with it, so the Content
 	// Browser shows real checkout/lock/modified icons immediately - without this, per-asset states
@@ -65,14 +76,16 @@ bool FLoreConnectWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// that exact file, which is why a manual Revision Control > Refresh was needed after every launch.
 	TArray<FString> ContentDir;
 	ContentDir.Add(FPaths::ProjectContentDir());
-	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, ContentDir, Provider, InCommand.ErrorMessages, States);
-	InCommand.bCommandSuccessful &= Provider.IsAvailable();
+	StateScanPaths = ContentDir;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, ContentDir, LoreProvider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	InCommand.bCommandSuccessful = bApplyStateResults;
+	InCommand.bCommandSuccessful &= LoreProvider.IsAvailable();
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreConnectWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -89,6 +102,49 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		CommitMessage = TEXT("Unreal Editor auto-commit");
 	}
 
+	if (InCommand.Files.IsEmpty())
+	{
+		InCommand.ErrorMessages.Add(TEXT("Submit was cancelled because no repository files were selected."));
+		return false;
+	}
+
+	// Lore locks are advisory, so validate against a fresh server query immediately before staging.
+	// A query failure is a hard stop: stale cache data must never be treated as permission to submit.
+	if (InCommand.bShouldLockFiles)
+	{
+		TMap<FString, FString> LockedBy;
+		if (!FLoreSourceControlUtils::GetLoreLockStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, *InCommand.Provider, LockedBy, &InCommand.ErrorMessages))
+		{
+			InCommand.ErrorMessages.Add(TEXT("Submit aborted because current lock ownership could not be verified."));
+			return false;
+		}
+
+		const FString OwnIdentity = InCommand.Provider->GetIdentity();
+		for (const FString& File : InCommand.Files)
+		{
+			const FString NormalizedFile = NormalizeComparisonPath(File);
+			for (const TPair<FString, FString>& Lock : LockedBy)
+			{
+				if (NormalizeComparisonPath(Lock.Key) != NormalizedFile)
+				{
+					continue;
+				}
+
+				const bool bOwnLock = Lock.Value.Equals(TEXT("me"), ESearchCase::IgnoreCase)
+					|| Lock.Value.Equals(TEXT("self"), ESearchCase::IgnoreCase)
+					|| (!OwnIdentity.IsEmpty() && Lock.Value.Equals(OwnIdentity, ESearchCase::IgnoreCase));
+				if (!bOwnLock)
+				{
+					InCommand.ErrorMessages.Add(FString::Printf(
+						TEXT("Submit aborted: %s is locked by %s."),
+						*FPaths::GetCleanFilename(File),
+						Lock.Value.IsEmpty() ? TEXT("another user") : *Lock.Value));
+					return false;
+				}
+			}
+		}
+	}
+
 	// First, make sure files are staged.
 	// Strategy: use `lore stage --scan <files>` then `lore commit "msg"`
 	TArray<FString> StageParams;
@@ -100,7 +156,52 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	if (!bStaged)
 	{
 		// Try without --scan as fallback
-		FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, StageResults, StageErrors);
+		TArray<FString> FallbackResults;
+		TArray<FString> FallbackErrors;
+		bStaged = FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, FallbackResults, FallbackErrors);
+		StageResults.Append(FallbackResults);
+		StageErrors.Append(FallbackErrors);
+	}
+	InCommand.InfoMessages.Append(StageResults);
+	if (!bStaged)
+	{
+		InCommand.ErrorMessages.Append(StageErrors);
+		InCommand.ErrorMessages.Add(TEXT("Submit aborted because the selected files could not be staged."));
+		return false;
+	}
+
+	// `lore commit` commits the entire stage. Verify the stage contains no unrelated file before
+	// invoking it, preserving the user's existing stage instead of silently committing extra work.
+	TArray<FString> StagedFiles;
+	if (!FLoreSourceControlUtils::RunGetStagedFiles(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StagedFiles, InCommand.ErrorMessages))
+	{
+		InCommand.ErrorMessages.Add(TEXT("Submit aborted because the staged file set could not be verified."));
+		return false;
+	}
+
+	TSet<FString> SelectedPaths;
+	for (const FString& File : InCommand.Files)
+	{
+		SelectedPaths.Add(NormalizeComparisonPath(File));
+	}
+
+	TArray<FString> UnexpectedStagedFiles;
+	for (const FString& File : StagedFiles)
+	{
+		if (!SelectedPaths.Contains(NormalizeComparisonPath(File)))
+		{
+			UnexpectedStagedFiles.Add(File);
+		}
+	}
+
+	if (!UnexpectedStagedFiles.IsEmpty())
+	{
+		InCommand.ErrorMessages.Add(TEXT("Submit aborted: Lore's stage also contains files outside the current selection:"));
+		for (const FString& File : UnexpectedStagedFiles)
+		{
+			InCommand.ErrorMessages.Add(FString::Printf(TEXT("  %s"), *File));
+		}
+		return false;
 	}
 
 	// Now commit
@@ -116,32 +217,34 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// Push right after commit - a commit that only lives locally isn't "submitted" from the rest of
 	// the team's point of view, matching the P4/Git "Submit = it's on the server now" expectation.
-	// Doesn't fail the whole command if push fails: the commit itself already succeeded locally,
-	// so just surface it as an error the user can act on (retry the push manually).
+	bool bPushed = false;
 	if (InCommand.bCommandSuccessful)
 	{
 		TArray<FString> PushResults;
 		TArray<FString> PushErrors;
-		const bool bPushed = FLoreSourceControlUtils::RunLoreCommand(TEXT("branch push"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), TArray<FString>(), PushResults, PushErrors);
+		bPushed = FLoreSourceControlUtils::RunLoreCommand(TEXT("branch push"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), TArray<FString>(), PushResults, PushErrors);
 
 		InCommand.InfoMessages.Append(PushResults);
 		if (!bPushed)
 		{
 			InCommand.ErrorMessages.Append(PushErrors);
 			InCommand.ErrorMessages.Add(TEXT("Commit succeeded locally, but push to remote failed. Run 'lore branch push' manually to publish it."));
+			InCommand.Provider->SetHasChangesToPush(true);
+			InCommand.bCommandSuccessful = false;
 		}
 	}
 
 	// The change is now committed, so there is nothing left to protect by holding the lock -
 	// release it, same as Revert. Best-effort: a file that was never locked has nothing to release.
-	if (InCommand.bCommandSuccessful && FLoreSourceControlUtils::ShouldLockFiles())
+	if (InCommand.bCommandSuccessful && bPushed && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
 		FLoreSourceControlUtils::RunLoreCommand(TEXT("lock release"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
 	}
 
 	// Refresh states for the files
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
 	InCommand.Provider->UpdateCurrentBranchName();
 
@@ -164,7 +267,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 bool FLoreCheckInWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -175,11 +278,10 @@ bool FLoreSyncWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// Optional: support syncing specific revision if provided somehow via extended API in future.
 	// For now plain sync.
 
-	Provider = InCommand.Provider;
-
 	TArray<FString> Results;
 	TArray<FString> Errors;
-	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunSync(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, Results, Errors, ChangedContentPaths, bRequiresRestart);
+	bSyncSucceeded = FLoreSourceControlUtils::RunSync(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, Results, Errors, ChangedContentPaths, bRequiresRestart);
+	InCommand.bCommandSuccessful = bSyncSucceeded;
 
 	InCommand.InfoMessages.Append(Results);
 	InCommand.ErrorMessages.Append(Errors);
@@ -192,12 +294,17 @@ bool FLoreSyncWorker::Execute(FLoreSourceControlCommand& InCommand)
 		FilesToUpdate.Add(FPaths::ProjectContentDir());
 	}
 
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, FilesToUpdate, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = FilesToUpdate;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, FilesToUpdate, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
 	// Refresh branch name in case sync switched branches
 	InCommand.Provider->UpdateCurrentBranchName();
 
-	if (bRequiresRestart)
+	if (!InCommand.bCommandSuccessful)
+	{
+		InCommand.ErrorMessages.Add(TEXT("Sync failed; the working copy was not reported as up to date."));
+	}
+	else if (bRequiresRestart)
 	{
 		InCommand.InfoMessages.Add(TEXT("Sync complete. Source/Config files changed - restart the editor to pick up the new code."));
 	}
@@ -216,18 +323,18 @@ bool FLoreSyncWorker::Execute(FLoreSourceControlCommand& InCommand)
 bool FLoreSyncWorker::UpdateStates() const
 {
 #if SOURCE_CONTROL_WITH_SLATE
-	if (bRequiresRestart)
+	if (bSyncSucceeded && bRequiresRestart)
 	{
 		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Sync complete. Source/Config files changed - restart the editor now to pick up the new code.")));
 	}
-	else
 #endif
-	if (!ChangedContentPaths.IsEmpty() && Provider)
+
+	if (bSyncSucceeded && !bRequiresRestart && !ChangedContentPaths.IsEmpty() && Provider)
 	{
 		Provider->ReloadContentPackages(ChangedContentPaths);
 	}
 
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -240,8 +347,11 @@ bool FLoreUpdateStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 		InCommand.PathToRepositoryRoot,
 		InCommand.Files,
 		*InCommand.Provider,
+		InCommand.bShouldLockFiles,
 		InCommand.ErrorMessages,
 		States);
+	StateScanPaths = InCommand.Files.IsEmpty() ? TArray<FString>{ InCommand.PathToRepositoryRoot } : InCommand.Files;
+	bApplyStateResults = InCommand.bCommandSuccessful;
 
 	// History is a separate, per-file "lore file history" call - only worth the extra round trips
 	// when something actually asked for it (the History window sets this), not on every routine
@@ -268,7 +378,7 @@ bool FLoreUpdateStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 bool FLoreUpdateStatusWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -276,7 +386,7 @@ bool FLoreUpdateStatusWorker::UpdateStates() const
 //-----------------------------------------------------------------------------
 bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	const bool bShouldLock = FLoreSourceControlUtils::ShouldLockFiles();
+	const bool bShouldLock = InCommand.bShouldLockFiles;
 
 	if (bShouldLock)
 	{
@@ -305,7 +415,8 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 	}
 
 	// Refresh status/locks
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
 	// Optimistically ensure checkout state for the files we successfully locked (in case post-acquire lock status
 	// reports nothing due to capture/owner/branch timing; the acquire RC already confirmed success).
@@ -324,7 +435,7 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 bool FLoreCheckOutWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -343,20 +454,23 @@ bool FLoreRevertWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// Reverting local edits also gives up any lock held on the file - there is nothing left to
 	// check in, so there is no reason to keep it locked. Best-effort: a file that was never locked
 	// simply has nothing to release, so this does not affect InCommand.bCommandSuccessful.
-	if (FLoreSourceControlUtils::ShouldLockFiles())
+	if (InCommand.bCommandSuccessful && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
 		FLoreSourceControlUtils::RunLoreCommand(TEXT("lock release"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
+		InCommand.InfoMessages.Append(UnlockResults);
+		InCommand.ErrorMessages.Append(UnlockErrors);
 	}
 
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 	InCommand.Provider->UpdateCurrentBranchName();
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreRevertWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -367,14 +481,16 @@ bool FLoreMarkForAddWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// Deliberately does not call `lore stage` here - staging is left entirely to CheckIn's own
 	// unconditional `stage --scan` right before commit, same as modified files. Keeps "staged in
 	// lore" meaning only one thing: about to be committed, not "the editor touched it at some point".
-	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	InCommand.bCommandSuccessful = bApplyStateResults;
 	InCommand.Provider->UpdateCurrentBranchName();
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreMarkForAddWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -390,9 +506,14 @@ bool FLoreDeleteWorker::Execute(FLoreSourceControlCommand& InCommand)
 	{
 		// Runs on a pool thread - read via the provider's lock, not a raw reference to the map.
 		FLoreSourceControlState CachedState(File);
-		if (InCommand.Provider->TryGetStateFromCache(File, CachedState) && CachedState.CanAdd())
+		if (InCommand.Provider->TryGetStateFromCache(File, CachedState) && CachedState.IsAdded())
 		{
-			FilesToUnstage.Add(File);
+			// A never-staged add needs no Lore-side delete action. A staged add must be removed
+			// from the stage so a later repository-wide commit cannot resurrect it.
+			if (CachedState.bIsStaged)
+			{
+				FilesToUnstage.Add(File);
+			}
 		}
 		else
 		{
@@ -413,15 +534,18 @@ bool FLoreDeleteWorker::Execute(FLoreSourceControlCommand& InCommand)
 	{
 		InCommand.bCommandSuccessful &= FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), FilesToStage, Results, Errors);
 	}
+	InCommand.InfoMessages.Append(Results);
+	InCommand.ErrorMessages.Append(Errors);
 
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 	InCommand.Provider->UpdateCurrentBranchName();
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreDeleteWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
 
 //-----------------------------------------------------------------------------
@@ -429,7 +553,7 @@ bool FLoreDeleteWorker::UpdateStates() const
 //-----------------------------------------------------------------------------
 bool FLoreUnlockWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	if (FLoreSourceControlUtils::ShouldLockFiles())
+	if (InCommand.bShouldLockFiles)
 	{
 		TArray<FString> Results;
 		TArray<FString> Errors;
@@ -444,14 +568,121 @@ bool FLoreUnlockWorker::Execute(FLoreSourceControlCommand& InCommand)
 		InCommand.bCommandSuccessful = true;
 	}
 
-	FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.ErrorMessages, States);
+	StateScanPaths = InCommand.Files;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 	InCommand.Provider->UpdateCurrentBranchName();
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreUnlockWorker::UpdateStates() const
 {
-	return FLoreSourceControlUtils::UpdateCachedStates(States);
+	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
+}
+
+//-----------------------------------------------------------------------------
+// Internal asynchronous operations
+//-----------------------------------------------------------------------------
+bool FLorePrintStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
+{
+	TArray<FString> Results;
+	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunLoreCommand(
+		TEXT("status"),
+		InCommand.PathToLoreBinary,
+		InCommand.PathToRepositoryRoot,
+		TArray<FString>{ TEXT("--scan") },
+		TArray<FString>(),
+		Results,
+		InCommand.ErrorMessages,
+		/*bUseJson=*/false);
+	InCommand.InfoMessages.Append(Results);
+	return InCommand.bCommandSuccessful;
+}
+
+bool FLoreRefreshBranchesWorker::Execute(FLoreSourceControlCommand& InCommand)
+{
+	bApplyBranches = FLoreSourceControlUtils::RunGetBranches(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, Branches);
+	InCommand.bCommandSuccessful = bApplyBranches;
+	return InCommand.bCommandSuccessful;
+}
+
+bool FLoreRefreshBranchesWorker::UpdateStates() const
+{
+	if (!Provider || !bApplyBranches)
+	{
+		return false;
+	}
+
+	Provider->SetCachedBranches(Branches);
+	return true;
+}
+
+bool FLoreSwitchBranchWorker::Execute(FLoreSourceControlCommand& InCommand)
+{
+	const TSharedRef<FLoreSwitchBranchOperation> Operation = StaticCastSharedRef<FLoreSwitchBranchOperation>(InCommand.Operation);
+
+	TArray<FString> ChangedPaths;
+	bSwitchSucceeded = FLoreSourceControlUtils::RunSwitchBranch(
+		InCommand.PathToLoreBinary,
+		InCommand.PathToRepositoryRoot,
+		Operation->GetBranchName(),
+		InCommand.ErrorMessages,
+		&ChangedPaths);
+
+	if (!bSwitchSucceeded)
+	{
+		const bool bStagedStateBlocked = InCommand.ErrorMessages.ContainsByPredicate([](const FString& Error)
+		{
+			return Error.Contains(TEXT("staged state"), ESearchCase::IgnoreCase);
+		});
+		Operation->SetOutcome(bStagedStateBlocked
+			? FLoreSwitchBranchOperation::EOutcome::StagedStateBlocked
+			: FLoreSwitchBranchOperation::EOutcome::Failed);
+		return false;
+	}
+
+	bRequiresRestart = FLoreSourceControlUtils::ClassifyChangedPaths(ChangedPaths, ChangedContentPaths);
+	StateScanPaths = TArray<FString>{ InCommand.PathToRepositoryRoot };
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(
+		InCommand.PathToLoreBinary,
+		InCommand.PathToRepositoryRoot,
+		StateScanPaths,
+		*InCommand.Provider,
+		InCommand.bShouldLockFiles,
+		InCommand.ErrorMessages,
+		States);
+
+	// The switch itself succeeded even if the follow-up status/lock refresh did not.
+	InCommand.Provider->SetBranchName(Operation->GetBranchName());
+	Operation->SetOutcome(FLoreSwitchBranchOperation::EOutcome::Success);
+	InCommand.bCommandSuccessful = true;
+	return true;
+}
+
+bool FLoreSwitchBranchWorker::UpdateStates() const
+{
+	if (!Provider || !bSwitchSucceeded)
+	{
+		return false;
+	}
+
+	// The working copy changed underneath every cached state. Always discard the old cache, even
+	// if the follow-up status query failed, so callers never consume pre-switch state.
+	Provider->ClearStateCache();
+	FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
+
+#if SOURCE_CONTROL_WITH_SLATE
+	if (bRequiresRestart)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("SwitchBranchRestart", "Branch switched. Please restart the editor now to pick up the new Source/Config changes."));
+	}
+#endif
+
+	if (!bRequiresRestart && !ChangedContentPaths.IsEmpty())
+	{
+		Provider->ReloadContentPackages(ChangedContentPaths);
+	}
+
+	return true;
 }
 
 #undef LOCTEXT_NAMESPACE

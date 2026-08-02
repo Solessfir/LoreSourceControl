@@ -3,8 +3,6 @@
 #include "SLoreSourceControlSettings.h"
 #include "LoreSourceControlProvider.h"
 #include "LoreSourceControlUtils.h"
-#include "Modules/ModuleManager.h"
-#include "ISourceControlModule.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SFilePathPicker.h"
@@ -16,14 +14,10 @@
 
 #define LOCTEXT_NAMESPACE "SLoreSourceControlSettings"
 
-static const FLoreSourceControlProvider& GetLoreProvider()
-{
-	const ISourceControlModule& SourceControlModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-	return static_cast<const FLoreSourceControlProvider&>(SourceControlModule.GetProvider());
-}
-
 void SLoreSourceControlSettings::Construct(const FArguments& InArgs)
 {
+	Provider = InArgs._Provider;
+	check(Provider);
 	const FText FileFilterType = LOCTEXT("Executables", "Executables");
 #if PLATFORM_WINDOWS
 	const FString FileFilterText = FString::Printf(TEXT("%s (*.exe)|*.exe"), *FileFilterType.ToString());
@@ -159,15 +153,13 @@ void SLoreSourceControlSettings::OnBinaryPathPicked(const FString& PickedPath) c
 	FLoreSourceControlUtils::SetUserConfiguredLoreBinaryPath(PickedPath);
 
 	// Notify the provider so it can re-check availability
-	const ISourceControlModule& SourceControlModule = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-	FLoreSourceControlProvider& Provider = static_cast<FLoreSourceControlProvider&>(SourceControlModule.GetProvider());
-	Provider.SetLoreBinaryPath(PickedPath);
-	Provider.CheckLoreAvailability();
+	Provider->SetLoreBinaryPath(PickedPath);
+	Provider->CheckLoreAvailability();
 }
 
 bool SLoreSourceControlSettings::IsLoreBinaryValid() const
 {
-	return GetLoreProvider().IsLoreBinaryAvailable();
+	return Provider->IsLoreBinaryAvailable();
 }
 
 EVisibility SLoreSourceControlSettings::GetWarningVisibility() const
@@ -177,7 +169,7 @@ EVisibility SLoreSourceControlSettings::GetWarningVisibility() const
 
 FText SLoreSourceControlSettings::GetWarningText() const
 {
-	FString Path = GetLoreProvider().GetLoreBinaryPath();
+	FString Path = Provider->GetLoreBinaryPath();
 	if (Path.IsEmpty())
 	{
 		Path = TEXT("<none>");
@@ -202,24 +194,24 @@ FText SLoreSourceControlSettings::GetWarningText() const
 
 EVisibility SLoreSourceControlSettings::GetConnectionInfoVisibility() const
 {
-	return GetLoreProvider().IsAvailable() ? EVisibility::Visible : EVisibility::Collapsed;
+	return Provider->IsAvailable() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 FText SLoreSourceControlSettings::GetServerText() const
 {
-	const FString Server = GetLoreProvider().GetRemoteUrl();
+	const FString Server = Provider->GetRemoteUrl();
 	return FText::FromString(Server.IsEmpty() ? TEXT("(offline, no remote configured)") : Server);
 }
 
 FText SLoreSourceControlSettings::GetUserText() const
 {
-	const FString User = GetLoreProvider().GetIdentity();
+	const FString User = Provider->GetIdentity();
 	return FText::FromString(User.IsEmpty() ? TEXT("(not configured)") : User);
 }
 
 FText SLoreSourceControlSettings::GetBranchText() const
 {
-	const FString Branch = GetLoreProvider().GetBranchName();
+	const FString Branch = Provider->GetBranchName();
 	return FText::FromString(Branch.IsEmpty() ? TEXT("(unknown)") : Branch);
 }
 

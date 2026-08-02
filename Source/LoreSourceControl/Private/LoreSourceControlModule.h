@@ -7,6 +7,7 @@
 #include "LoreSourceControlProvider.h"
 
 class SWindow;
+struct IConsoleCommand;
 
 class FLoreSourceControlModule : public IModuleInterface
 {
@@ -33,6 +34,9 @@ private:
 
 	/** Prompts for confirmation, then switches to the given branch (hot-reloading Content, or asking for a restart if Source/Config was touched) */
 	void OnBranchSelected(FString InBranchName);
+
+	/** Reports asynchronous branch-switch completion and refreshes the branch menu. */
+	void OnBranchSwitchComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult);
 
 	/** Runs an async Sync (pull) - the same worker Content/Source reload and restart-prompt handling as branch switch applies here too */
 	void OnSyncClicked();
@@ -64,6 +68,10 @@ private:
 	/** Menu names already extended with the branch switcher (the level editor, plus one per opened asset editor) - guards against re-adding a duplicate entry if an editor instance opens more than one asset */
 	TSet<FName> RegisteredToolbarMenus;
 #endif
+
+	IConsoleCommand* LoreSyncCommand = nullptr;
+	IConsoleCommand* LoreStatusCommand = nullptr;
+	IConsoleCommand* LoreCommitCommand = nullptr;
 
 	/** The one and only source control provider */
 	FLoreSourceControlProvider LoreSourceControlProvider;

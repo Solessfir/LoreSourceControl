@@ -83,6 +83,12 @@ public:
 	/** Add/update cached states, stamping the current branch name onto each (thread safe) */
 	void AddStatesToCache(const TArray<FLoreSourceControlState>& InStates);
 
+	/** Replace all cached entries covered by a successful scan, removing stale states first. */
+	void ReplaceStatesInCache(const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths);
+
+	/** Clear every cached file state (used after a working-copy switch). */
+	void ClearStateCache();
+
 	/** Remove a state from cache */
 	bool RemoveStateFromCache(const FString& Filename);
 
@@ -111,30 +117,11 @@ public:
 	/** Number of branches as of the last fetch (cheap, cached - avoids shelling out to lore.exe on every UI tick) */
 	int32 GetCachedBranchCount() const;
 
-	/** Re-fetches the branch list on a background thread and updates the cache when done (fire-and-forget) */
+	/** Apply a successfully fetched branch list on the game thread. */
+	void SetCachedBranches(const TArray<FLoreBranchInfo>& InBranches);
+
+	/** Queue a branch-list refresh behind any in-flight Lore operation. */
 	void RefreshBranchesAsync();
-
-	enum class ELoreSwitchResult : uint8
-	{
-		Success,
-		/** Lore refused because there is a pending staged (committed-to-stage, not yet pushed) change */
-		StagedStateBlocked,
-		Failed
-	};
-
-	/**
-	 * Diffs the current branch against InTargetBranch to decide whether the switch would touch
-	 * Source/Config/.uplugin files (needs an editor restart) or only Content (safe to hot-reload).
-	 * Returns true (the safe default) if the diff itself could not be determined.
-	 * OutChangedContentPaths is filled with the repository-relative paths of changed Content files.
-	 */
-	bool DoesBranchSwitchTouchCode(const FString& InTargetBranch, TArray<FString>& OutChangedContentPaths) const;
-
-	/**
-	 * Switch the working copy to a different branch, synchronously, then refresh status.
-	 * Caller is responsible for warning the user beforehand - this changes files on disk.
-	 */
-	ELoreSwitchResult SwitchBranch(const FString& InBranchName);
 
 	/**
 	 * Finds any currently loaded packages under the given repository-relative Content paths and
@@ -155,6 +142,9 @@ public:
 	/** Set the "needs to sync from remote" flag (called from status parsing) */
 	void SetHasChangesToSync(const bool bInHasChanges);
 
+	/** Set the "has local unpublished commits" flag (called from status parsing) */
+	void SetHasChangesToPush(const bool bInHasChanges);
+
 private:
 	/** Create a worker for a given operation */
 	TSharedPtr<ILoreSourceControlWorker> CreateWorker(const FName& InOperationName) const;
@@ -162,13 +152,8 @@ private:
 	/** Send a finished command's info/error messages to the SourceControl message log */
 	static void OutputCommandMessages(const FLoreSourceControlCommand& InCommand);
 
-	/**
-	 * Returns InFiles with anything locked by someone else removed, so a submit can never overwrite
-	 * another user's lock - Lore's server does not stop that for us (see ShouldLockFiles). If anything
-	 * was excluded, asks the user whether to revert those files now (or leave them as local, later-
-	 * revertible edits) and, if they agree, fires an async Revert on them.
-	 */
-	TArray<FString> FilterOutOtherLockedFiles(const TArray<FString>& InFiles);
+	/** Submit the first undispatched command only; all Lore operations are serialized in FIFO order. */
+	void TryDispatchNextCommand();
 
 	/** Critical section for thread safety */
 	mutable FCriticalSection CriticalSection;
@@ -209,12 +194,13 @@ private:
 	/** Cached "has incoming changes" (remote is ahead or diverged) */
 	bool bHasChangesToSync = false;
 
+	/** Cached "has unpublished local commits" fact. */
+	bool bHasChangesToPush = false;
+
 	/** Branch list from the last successful RefreshBranchesAsync(), guarded by CriticalSection */
 	TArray<FLoreBranchInfo> CachedBranches;
 
 	/** Count from the last branch fetch, used by GetCachedBranchCount() (-1 = never fetched yet) */
 	int32 CachedBranchCount = -1;
 
-	/** Alive token for async lambdas that hop back to the game thread (see RefreshBranchesAsync) */
-	TSharedPtr<uint8, ESPMode::ThreadSafe> AliveMarker = MakeShared<uint8, ESPMode::ThreadSafe>(0);
 };
