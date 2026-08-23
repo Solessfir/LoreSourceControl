@@ -16,10 +16,12 @@
 #include "SourceControlWindows.h"
 #include "ToolMenus.h"
 #include "Misc/MessageDialog.h"
+#include "Logging/MessageLog.h"
+#include "Framework/Notifications/NotificationManager.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Input/SComboButton.h"
-#include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -34,6 +36,34 @@
 #endif
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
+
+#if SOURCE_CONTROL_WITH_SLATE
+static TWeakPtr<SNotificationItem> ShowLoreProgressNotification(const FText& Text)
+{
+	FNotificationInfo Info(Text);
+	Info.bFireAndForget = false;
+	Info.ExpireDuration = 5.f;
+	Info.HyperlinkText = LOCTEXT("ShowSourceControlLog", "Show Message Log");
+	Info.Hyperlink = FSimpleDelegate::CreateStatic([]() { FMessageLog("SourceControl").Open(EMessageSeverity::Info, true); });
+	const TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+	if (Notification)
+	{
+		Notification->SetCompletionState(SNotificationItem::CS_Pending);
+	}
+	return Notification;
+}
+
+static void CompleteLoreProgressNotification(TWeakPtr<SNotificationItem>& Notification, const FText& Text, SNotificationItem::ECompletionState CompletionState)
+{
+	if (const TSharedPtr<SNotificationItem> Item = Notification.Pin())
+	{
+		Item->SetText(Text);
+		Item->SetCompletionState(CompletionState);
+		Item->ExpireAndFadeout();
+	}
+	Notification.Reset();
+}
+#endif
 
 // Local helper to create workers (avoids issues taking address of member templates)
 template <typename TWorker>
@@ -178,6 +208,14 @@ void FLoreSourceControlModule::ShutdownModule()
 
 	if (FSlateApplication::IsInitialized())
 	{
+		if (const TSharedPtr<SNotificationItem> Notification = SyncNotification.Pin())
+		{
+			Notification->ExpireAndFadeout();
+		}
+		if (const TSharedPtr<SNotificationItem> Notification = BranchSwitchNotification.Pin())
+		{
+			Notification->ExpireAndFadeout();
+		}
 		FSlateApplication::Get().OnWindowBeingDestroyed().Remove(WindowBeingDestroyedHandle);
 	}
 
@@ -368,35 +406,11 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 	FMenuBuilder MenuBuilder(true, nullptr);
 
 	MenuBuilder.BeginSection("LoreActions", LOCTEXT("BranchSwitcherMenuActions", "Actions"));
-	MenuBuilder.AddWidget(
-		SNew(SButton)
-		.ButtonStyle(FAppStyle::Get(), "Menu.Button")
-		.ContentPadding(FMargin(12.f, 4.f, 8.f, 4.f))
-		.HAlign(HAlign_Fill)
-		.OnClicked_Lambda([this]() { OnSyncClicked(); return FReply::Handled(); })
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.VAlign(VAlign_Center)
-			.Padding(0.f, 0.f, 6.f, 0.f)
-			[
-				SNew(SImage)
-				.Image(FRevisionControlStyleManager::Get().GetBrush("RevisionControl.Actions.Sync"))
-			]
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.VAlign(VAlign_Center)
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("SyncAction", "Sync"))
-			]
-		],
-		FText::GetEmpty(),
-		true,
-		true,
-		LOCTEXT("SyncAction_Tooltip", "Pull latest from Lore")
-	);
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SyncAction", "Sync"),
+		LOCTEXT("SyncAction_Tooltip", "Pull latest from Lore"),
+		FSlateIcon(FRevisionControlStyleManager::Get().GetStyleSetName(), "RevisionControl.Actions.Sync"),
+		FUIAction(FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OnSyncClicked), FCanExecuteAction::CreateLambda([this]() { return !IsToolbarOperationInProgress(); })));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection("LoreBranches", LOCTEXT("BranchSwitcherMenuHeading", "Branches"));
@@ -411,7 +425,7 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 			const bool bIsCurrent = Branch.bIsCurrent;
 			FUIAction Action(
 				FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OnBranchSelected, Branch.Name),
-				FCanExecuteAction(),
+				FCanExecuteAction::CreateLambda([this, bIsCurrent]() { return !bIsCurrent && !IsToolbarOperationInProgress(); }),
 				FIsActionChecked::CreateLambda([bIsCurrent]() { return bIsCurrent; })
 			);
 
@@ -442,7 +456,7 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 
 void FLoreSourceControlModule::OnBranchSelected(FString InBranchName)
 {
-	if (InBranchName == LoreSourceControlProvider.GetBranchName())
+	if (IsToolbarOperationInProgress() || InBranchName == LoreSourceControlProvider.GetBranchName())
 	{
 		return;
 	}
@@ -456,6 +470,10 @@ void FLoreSourceControlModule::OnBranchSelected(FString InBranchName)
 		return;
 	}
 
+	bBranchSwitchInProgress = true;
+	BranchSwitchNotification = ShowLoreProgressNotification(FText::Format(LOCTEXT("SwitchBranchInProgress", "Switching to branch '{0}'..."), FText::FromString(InBranchName)));
+	RefreshToolbarExtension();
+
 	const TSharedRef<FLoreSwitchBranchOperation> Operation = ISourceControlOperation::Create<FLoreSwitchBranchOperation>(MoveTemp(InBranchName));
 	LoreSourceControlProvider.Execute(
 		Operation,
@@ -467,11 +485,15 @@ void FLoreSourceControlModule::OnBranchSelected(FString InBranchName)
 void FLoreSourceControlModule::OnBranchSwitchComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult)
 {
 	const TSharedRef<FLoreSwitchBranchOperation> Operation = StaticCastSharedRef<FLoreSwitchBranchOperation>(InOperation);
+	bBranchSwitchInProgress = false;
+	RefreshToolbarExtension();
 	if (InResult == ECommandResult::Succeeded)
 	{
+		CompleteLoreProgressNotification(BranchSwitchNotification, FText::Format(LOCTEXT("SwitchBranchSucceeded", "Switched to branch '{0}'."), FText::FromString(Operation->GetBranchName())), SNotificationItem::CS_Success);
 		LoreSourceControlProvider.RefreshBranchesAsync();
 		return;
 	}
+	CompleteLoreProgressNotification(BranchSwitchNotification, LOCTEXT("SwitchBranchNotificationFailed", "Failed to switch Lore branch."), SNotificationItem::CS_Fail);
 
 	switch (Operation->GetOutcome())
 	{
@@ -488,10 +510,38 @@ void FLoreSourceControlModule::OnBranchSwitchComplete(const FSourceControlOperat
 
 void FLoreSourceControlModule::OnSyncClicked()
 {
+	if (IsToolbarOperationInProgress())
+	{
+		return;
+	}
+
+	bSyncInProgress = true;
+	SyncNotification = ShowLoreProgressNotification(LOCTEXT("SyncInProgress", "Syncing Lore workspace..."));
+	RefreshToolbarExtension();
+
 	// Queue this asynchronously.
 	// FLoreSyncWorker::UpdateStates() is called from FLoreSourceControlProvider::Tick() when the operation completes and handles the Content auto-reload or restart prompt, as it does for branch switches.
 	const TSharedRef<FSync> SyncOp = ISourceControlOperation::Create<FSync>();
-	LoreSourceControlProvider.Execute(SyncOp, EConcurrency::Asynchronous);
+	LoreSourceControlProvider.Execute(SyncOp, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FLoreSourceControlModule::OnSyncComplete));
+}
+
+void FLoreSourceControlModule::OnSyncComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult)
+{
+	bSyncInProgress = false;
+	RefreshToolbarExtension();
+	if (InResult == ECommandResult::Succeeded)
+	{
+		CompleteLoreProgressNotification(SyncNotification, LOCTEXT("SyncSucceeded", "Lore sync complete."), SNotificationItem::CS_Success);
+	}
+	else
+	{
+		CompleteLoreProgressNotification(SyncNotification, LOCTEXT("SyncFailed", "Lore sync failed. See the Source Control message log for details."), SNotificationItem::CS_Fail);
+	}
+}
+
+bool FLoreSourceControlModule::IsToolbarOperationInProgress() const
+{
+	return bSyncInProgress || bBranchSwitchInProgress;
 }
 
 #endif

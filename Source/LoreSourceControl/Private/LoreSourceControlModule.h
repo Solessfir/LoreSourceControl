@@ -7,6 +7,7 @@
 #include "LoreSourceControlProvider.h"
 
 class SWindow;
+class SNotificationItem;
 struct IConsoleCommand;
 
 class FLoreSourceControlModule : public IModuleInterface
@@ -40,6 +41,8 @@ private:
 
 	/** Runs an async Sync (pull) - the same worker Content/Source reload and restart-prompt handling as branch switch applies here too */
 	void OnSyncClicked();
+	void OnSyncComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult);
+	bool IsToolbarOperationInProgress() const;
 
 	/** Deferred RegisterToolbarExtension() trigger - see StartupModule() for why this can't run at module load time */
 	void OnMainFrameCreationFinished(TSharedPtr<SWindow> InRootWindow, bool bIsNewProjectWindow);
@@ -67,6 +70,10 @@ private:
 
 	/** Menu names already extended with the branch switcher (the level editor, plus one per opened asset editor) - guards against re-adding a duplicate entry if an editor instance opens more than one asset */
 	TSet<FName> RegisteredToolbarMenus;
+	bool bSyncInProgress = false;
+	bool bBranchSwitchInProgress = false;
+	TWeakPtr<SNotificationItem> SyncNotification;
+	TWeakPtr<SNotificationItem> BranchSwitchNotification;
 #endif
 
 	IConsoleCommand* LoreSyncCommand = nullptr;
