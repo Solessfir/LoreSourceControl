@@ -352,8 +352,8 @@ void FLoreSourceControlModule::RegisterToolbarExtensionForMenu(FName InMenuName)
 			return;
 		}
 
-		// Populate the cache once up front so the first click on the branch switcher isn't empty.
-		if (LoreSourceControlProvider.GetCachedBranchCount() == -1)
+		// Populate the cache once up front so the first click on the branch switcher can show a loading state immediately.
+		if (LoreSourceControlProvider.GetBranchCacheState() == ELoreBranchCacheState::NotLoaded)
 		{
 			LoreSourceControlProvider.RefreshBranchesAsync();
 		}
@@ -400,9 +400,18 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 	}
 
 	TArray<FLoreBranchInfo> Branches = LoreSourceControlProvider.GetCachedBranches();
+	ELoreBranchCacheState BranchState = LoreSourceControlProvider.GetBranchCacheState();
 
-	// Refresh in the background for next time - shelling out to lore.exe synchronously here would hang the menu open animation for however long that takes.
-	LoreSourceControlProvider.RefreshBranchesAsync();
+	if (BranchState == ELoreBranchCacheState::NotLoaded)
+	{
+		LoreSourceControlProvider.RefreshBranchesAsync();
+		BranchState = ELoreBranchCacheState::Loading;
+	}
+	else if (BranchState == ELoreBranchCacheState::Loaded)
+	{
+		// Keep showing the last good list while refreshing it for the next open.
+		LoreSourceControlProvider.RefreshBranchesAsync();
+	}
 
 	FMenuBuilder MenuBuilder(true, nullptr);
 
@@ -412,12 +421,33 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 		LOCTEXT("SyncAction_Tooltip", "Pull latest from Lore"),
 		FSlateIcon(FRevisionControlStyleManager::Get().GetStyleSetName(), "RevisionControl.Actions.Sync"),
 		FUIAction(FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OnSyncClicked), FCanExecuteAction::CreateLambda([this]() { return !IsToolbarOperationInProgress(); })));
+	if (BranchState == ELoreBranchCacheState::Failed)
+	{
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("RetryBranchRefresh", "Retry Branch Refresh"),
+			LOCTEXT("RetryBranchRefreshTooltip", "Try to load the Lore branch list again"),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([this]() { LoreSourceControlProvider.RefreshBranchesAsync(); })));
+	}
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection("LoreBranches", LOCTEXT("BranchSwitcherMenuHeading", "Branches"));
+	if (!Branches.IsEmpty() && BranchState == ELoreBranchCacheState::Failed)
+	{
+		MenuBuilder.AddMenuEntry(LOCTEXT("BranchesStale", "Refresh failed; showing cached branches"), FText::GetEmpty(), FSlateIcon(), FUIAction());
+	}
 	if (Branches.IsEmpty())
 	{
-		MenuBuilder.AddMenuEntry(LOCTEXT("NoBranchesFound", "No branches found"), FText::GetEmpty(), FSlateIcon(), FUIAction());
+		FText EmptyStateText = LOCTEXT("NoBranchesFound", "No branches found");
+		if (BranchState == ELoreBranchCacheState::Loading)
+		{
+			EmptyStateText = LOCTEXT("BranchesLoading", "Loading branches...");
+		}
+		else if (BranchState == ELoreBranchCacheState::Failed)
+		{
+			EmptyStateText = LOCTEXT("BranchesFailed", "Branches could not be loaded");
+		}
+		MenuBuilder.AddMenuEntry(EmptyStateText, FText::GetEmpty(), FSlateIcon(), FUIAction());
 	}
 	else
 	{

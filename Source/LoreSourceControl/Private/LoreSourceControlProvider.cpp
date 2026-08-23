@@ -63,6 +63,8 @@ void FLoreSourceControlProvider::Close()
 	bHasChangesToSync = false;
 	bHasChangesToPush = false;
 	BranchName.Empty();
+	CachedBranches.Empty();
+	BranchCacheState = ELoreBranchCacheState::NotLoaded;
 }
 
 FText FLoreSourceControlProvider::GetStatusText() const
@@ -578,6 +580,8 @@ void FLoreSourceControlProvider::CheckRepositoryStatus()
 		Identity.Empty();
 		bHasChangesToSync = false;
 		bHasChangesToPush = false;
+		CachedBranches.Empty();
+		BranchCacheState = ELoreBranchCacheState::NotLoaded;
 	}
 }
 
@@ -869,24 +873,47 @@ TArray<FLoreBranchInfo> FLoreSourceControlProvider::GetCachedBranches() const
 	return CachedBranches;
 }
 
-int32 FLoreSourceControlProvider::GetCachedBranchCount() const
+ELoreBranchCacheState FLoreSourceControlProvider::GetBranchCacheState() const
 {
 	FScopeLock Lock(&CriticalSection);
-	return CachedBranchCount;
+	return BranchCacheState;
 }
 
-void FLoreSourceControlProvider::SetCachedBranches(const TArray<FLoreBranchInfo>& InBranches)
+void FLoreSourceControlProvider::SetBranchRefreshResult(const TArray<FLoreBranchInfo>& InBranches, bool bSucceeded)
 {
 	FScopeLock Lock(&CriticalSection);
-	CachedBranches = InBranches;
-	CachedBranchCount = InBranches.Num();
+	if (bSucceeded)
+	{
+		CachedBranches = InBranches;
+		BranchCacheState = ELoreBranchCacheState::Loaded;
+	}
+	else
+	{
+		BranchCacheState = ELoreBranchCacheState::Failed;
+	}
 }
 
 void FLoreSourceControlProvider::RefreshBranchesAsync()
 {
-	if (IsAvailable())
+	if (!IsAvailable())
 	{
-		Execute(ISourceControlOperation::Create<FLoreRefreshBranchesOperation>(), TArray<FString>(), EConcurrency::Asynchronous);
+		return;
+	}
+
+	{
+		FScopeLock Lock(&CriticalSection);
+		if (BranchCacheState == ELoreBranchCacheState::Loading)
+		{
+			return;
+		}
+		BranchCacheState = ELoreBranchCacheState::Loading;
+	}
+
+	const ECommandResult::Type Result = Execute(ISourceControlOperation::Create<FLoreRefreshBranchesOperation>(), TArray<FString>(), EConcurrency::Asynchronous);
+	if (Result != ECommandResult::Succeeded)
+	{
+		SetBranchRefreshResult(TArray<FLoreBranchInfo>(), false);
+		BroadcastStateChanged();
 	}
 }
 

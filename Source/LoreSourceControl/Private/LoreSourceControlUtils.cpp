@@ -843,11 +843,15 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches)
+	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches, TArray<FString>* OutErrorMessages)
 	{
 		TArray<FString> Results;
 		TArray<FString> Errors;
 		const bool bOk = RunLoreCommand(TEXT("branch list"), InLoreBinary, InRepositoryRoot, TArray<FString>(), TArray<FString>(), Results, Errors);
+		if (OutErrorMessages)
+		{
+			OutErrorMessages->Append(Errors);
+		}
 
 		for (const FString& Line : Results)
 		{

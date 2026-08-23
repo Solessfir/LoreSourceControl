@@ -10,6 +10,14 @@
 
 class FLoreSourceControlCommand;
 
+enum class ELoreBranchCacheState : uint8
+{
+	NotLoaded,
+	Loading,
+	Loaded,
+	Failed
+};
+
 class FLoreSourceControlProvider : public ISourceControlProvider
 {
 public:
@@ -118,11 +126,10 @@ public:
 	/** Returns the last-fetched branch list instantly, without shelling out to lore.exe (see RefreshBranchesAsync) */
 	TArray<FLoreBranchInfo> GetCachedBranches() const;
 
-	/** Number of branches as of the last fetch (cheap, cached - avoids shelling out to lore.exe on every UI tick) */
-	int32 GetCachedBranchCount() const;
+	ELoreBranchCacheState GetBranchCacheState() const;
 
-	/** Apply a successfully fetched branch list on the game thread. */
-	void SetCachedBranches(const TArray<FLoreBranchInfo>& InBranches);
+	/** Apply a completed branch refresh on the game thread. Failed refreshes preserve the last good list. */
+	void SetBranchRefreshResult(const TArray<FLoreBranchInfo>& InBranches, bool bSucceeded);
 
 	/** Queue a branch-list refresh behind any in-flight Lore operation. */
 	void RefreshBranchesAsync();
@@ -207,7 +214,6 @@ private:
 	/** Branch list from the last successful RefreshBranchesAsync(), guarded by CriticalSection */
 	TArray<FLoreBranchInfo> CachedBranches;
 
-	/** Count from the last branch fetch, used by GetCachedBranchCount() (-1 = never fetched yet) */
-	int32 CachedBranchCount = -1;
+	ELoreBranchCacheState BranchCacheState = ELoreBranchCacheState::NotLoaded;
 
 };

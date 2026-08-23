@@ -178,7 +178,7 @@ public:
 
 private:
 	TArray<FLoreBranchInfo> Branches;
-	bool bApplyBranches = false;
+	bool bRefreshSucceeded = false;
 };
 
 class FLoreSwitchBranchWorker : public ILoreSourceControlWorker

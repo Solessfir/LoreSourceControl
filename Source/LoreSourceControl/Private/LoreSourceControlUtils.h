@@ -105,7 +105,7 @@ namespace FLoreSourceControlUtils
 	/**
 	 * Run `lore branch list` (local branches only) and parse the resulting "branchListEntry" events.
 	 */
-	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches);
+	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches, TArray<FString>* OutErrorMessages = nullptr);
 
 	/**
 	 * Run `lore branch switch <name>` to switch the working copy to a different branch.

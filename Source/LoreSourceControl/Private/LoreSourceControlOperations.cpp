@@ -578,19 +578,19 @@ bool FLorePrintStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 bool FLoreRefreshBranchesWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	bApplyBranches = FLoreSourceControlUtils::RunGetBranches(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, Branches);
-	InCommand.bCommandSuccessful = bApplyBranches;
+	bRefreshSucceeded = FLoreSourceControlUtils::RunGetBranches(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, Branches, &InCommand.ErrorMessages);
+	InCommand.bCommandSuccessful = bRefreshSucceeded;
 	return InCommand.bCommandSuccessful;
 }
 
 bool FLoreRefreshBranchesWorker::UpdateStates() const
 {
-	if (!Provider || !bApplyBranches)
+	if (!Provider)
 	{
 		return false;
 	}
 
-	Provider->SetCachedBranches(Branches);
+	Provider->SetBranchRefreshResult(Branches, bRefreshSucceeded);
 	return true;
 }
 
