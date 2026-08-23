@@ -76,3 +76,19 @@ bool FLoreSourceControlCommand::RefreshStatus(const TArray<FString>& InFiles, bo
 
 	return FLoreSourceControlUtils::RunUpdateStatus(PathToLoreBinary, PathToRepositoryRoot, InFiles, *Provider, bQueryLocks, OutErrorMessages, OutStates);
 }
+
+bool FLoreSourceControlCommand::QueryLockStatus(TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages) const
+{
+	if (QueryLockStatusOverride)
+	{
+		return QueryLockStatusOverride(OutLockedBy, OutErrorMessages);
+	}
+
+	if (!Provider)
+	{
+		OutErrorMessages.Add(TEXT("Lore lock query requires a source control provider."));
+		return false;
+	}
+
+	return FLoreSourceControlUtils::GetLoreLockStatus(PathToLoreBinary, PathToRepositoryRoot, *Provider, OutLockedBy, &OutErrorMessages);
+}

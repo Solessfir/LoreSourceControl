@@ -90,13 +90,12 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	if (InCommand.bShouldLockFiles)
 	{
 		TMap<FString, FLoreLockOwner> LockedBy;
-		if (!FLoreSourceControlUtils::GetLoreLockStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, *InCommand.Provider, LockedBy, &InCommand.ErrorMessages))
+		if (!InCommand.QueryLockStatus(LockedBy, InCommand.ErrorMessages))
 		{
 			InCommand.ErrorMessages.Add(TEXT("Submit aborted because current lock ownership could not be verified."));
 			return false;
 		}
 
-		const FString OwnIdentity = InCommand.Provider->GetIdentity();
 		for (const FString& File : InCommand.Files)
 		{
 			const FString NormalizedFile = NormalizeComparisonPath(File);
@@ -109,7 +108,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 				const bool bOwnLock = Lock.Value.Identity.Equals(TEXT("me"), ESearchCase::IgnoreCase)
 					|| Lock.Value.Identity.Equals(TEXT("self"), ESearchCase::IgnoreCase)
-					|| (!OwnIdentity.IsEmpty() && Lock.Value.Identity.Equals(OwnIdentity, ESearchCase::IgnoreCase));
+					|| (!InCommand.Identity.IsEmpty() && Lock.Value.Identity.Equals(InCommand.Identity, ESearchCase::IgnoreCase));
 				if (!bOwnLock)
 				{
 					const FString LockOwner = Lock.Value.GetDisplayName();

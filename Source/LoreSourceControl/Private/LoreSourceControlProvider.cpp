@@ -281,6 +281,7 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 	Command->PathToLoreBinary = GetLoreBinaryPath();
 	Command->PathToRepositoryRoot = RepositoryRoot;
 	Command->bHasRemote = !GetRemoteUrl().IsEmpty();
+	Command->Identity = GetIdentity();
 	Command->bShouldLockFiles = FLoreSourceControlUtils::ShouldLockFiles() && Command->bHasRemote;
 	Command->OperationCompleteDelegate = InOperationCompleteDelegate;
 

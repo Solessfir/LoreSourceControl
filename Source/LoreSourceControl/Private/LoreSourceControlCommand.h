@@ -10,6 +10,7 @@
 
 class FLoreSourceControlProvider;
 class FLoreSourceControlState;
+struct FLoreLockOwner;
 
 /**
  * A single Lore operation in flight. Implements IQueuedWork so it can be run on the engine's
@@ -22,6 +23,7 @@ public:
 	using FRunLoreCommand = TFunction<bool(const FString&, const TArray<FString>&, const TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
 	using FReadStagedPaths = TFunction<bool(TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
 	using FRefreshStatus = TFunction<bool(const TArray<FString>&, bool, TArray<FString>&, TArray<FLoreSourceControlState>&)>;
+	using FQueryLockStatus = TFunction<bool(TMap<FString, FLoreLockOwner>&, TArray<FString>&)>;
 
 	FLoreSourceControlCommand(const FSourceControlOperationRef& InOperation, const FLoreSourceControlWorkerRef& InWorker)
 		: Operation(InOperation)
@@ -46,6 +48,7 @@ public:
 	bool RunLoreCommand(const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages) const;
 	bool ReadStagedPaths(TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages) const;
 	bool RefreshStatus(const TArray<FString>& InFiles, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates) const;
+	bool QueryLockStatus(TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages) const;
 
 	/**
 	 * Provider that issued this command, captured on the game thread at Execute() time. Workers
@@ -87,13 +90,15 @@ public:
 	/** Settings snapshot captured on the game thread; UObject settings must not be read by workers. */
 	bool bShouldLockFiles = true;
 
-	/** Repository capability snapshot captured with the rest of the command inputs. */
+	/** Repository values captured with the rest of the command inputs. */
 	bool bHasRemote = false;
+	FString Identity;
 
 	/** Narrow command boundaries used by worker-level tests. Production commands leave these unbound. */
 	FRunLoreCommand RunLoreCommandOverride;
 	FReadStagedPaths ReadStagedPathsOverride;
 	FRefreshStatus RefreshStatusOverride;
+	FQueryLockStatus QueryLockStatusOverride;
 
 	/** True once the provider has submitted this FIFO entry to the engine thread pool. */
 	bool bDispatched = false;

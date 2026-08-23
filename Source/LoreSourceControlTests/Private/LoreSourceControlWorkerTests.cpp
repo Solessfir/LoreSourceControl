@@ -3,7 +3,9 @@
 #include "LoreSourceControlCommand.h"
 #include "LoreSourceControlOperations.h"
 #include "LoreSourceControlState.h"
+#include "LoreSourceControlUtils.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
 #include "SourceControlOperations.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -18,11 +20,24 @@ namespace
 			, Command(Operation, Worker)
 		{
 			Operation->SetDescription(FText::FromString(TEXT("Test commit")));
-			Command.Files.Add(TEXT("C:/Repository/Content/Test.uasset"));
+			FString TestFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("LoreSourceControlWorkerTests/Content/Test.uasset")));
+			FPaths::NormalizeFilename(TestFile);
+			Command.Files.Add(TestFile);
 			Command.bShouldLockFiles = false;
+			Command.Identity = TEXT("Test user");
 			Command.RunLoreCommandOverride = [this](const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrors)
 			{
 				Calls.Add(InCommand);
+				if (InCommand == TEXT("stage"))
+				{
+					const bool bScansFiles = InParameters.Contains(TEXT("--scan"));
+					StageAttempts.Add(bScansFiles ? TEXT("scan") : TEXT("fallback"));
+					if (bScansFiles && !bScanStageSucceeds)
+					{
+						OutErrors.Add(TEXT("Simulated stage scan failure."));
+						return false;
+					}
+				}
 				if (InCommand == TEXT("commit"))
 				{
 					CommitParameters = InParameters;
@@ -45,6 +60,16 @@ namespace
 				Calls.Add(TEXT("refresh status"));
 				return true;
 			};
+			Command.QueryLockStatusOverride = [this](TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrors)
+			{
+				Calls.Add(TEXT("query locks"));
+				OutLockedBy = LockedBy;
+				if (!bLockQuerySucceeds)
+				{
+					OutErrors.Add(TEXT("Simulated lock query failure."));
+				}
+				return bLockQuerySucceeds;
+			};
 		}
 
 		TSharedRef<FCheckIn> Operation;
@@ -52,8 +77,12 @@ namespace
 		FLoreSourceControlCommand Command;
 		TArray<FString> Calls;
 		TArray<FString> CommitParameters;
+		TArray<FString> StageAttempts;
 		TArray<FString> StagedFiles;
+		TMap<FString, FLoreLockOwner> LockedBy;
 		bool bPushSucceeds = true;
+		bool bScanStageSucceeds = true;
+		bool bLockQuerySucceeds = true;
 	};
 
 	bool ContainsMessage(const TArray<FString>& Messages, const FString& ExpectedText)
@@ -111,11 +140,54 @@ bool FLoreUnexpectedStageWorkerTest::RunTest(const FString& Parameters)
 {
 	FSubmitWorkerFixture Fixture;
 	Fixture.StagedFiles = Fixture.Command.Files;
-	Fixture.StagedFiles.Add(TEXT("C:/Repository/Content/Unrelated.uasset"));
+	Fixture.StagedFiles.Add(FPaths::Combine(FPaths::GetPath(Fixture.Command.Files[0]), TEXT("Unrelated.uasset")));
 
 	TestFalse(TEXT("Unexpected staged work blocks submit"), Fixture.Worker->Execute(Fixture.Command));
 	TestEqual(TEXT("Worker stops before commit"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> read staged paths")));
 	TestTrue(TEXT("Unexpected path is reported"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Unrelated.uasset")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreForeignLockWorkerTest, "LoreSourceControl.Workers.CheckIn.ForeignLock", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreForeignLockWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.Command.bShouldLockFiles = true;
+	Fixture.LockedBy.Add(Fixture.Command.Files[0], FLoreLockOwner{ TEXT("other-user"), TEXT("Another user") });
+
+	TestFalse(TEXT("Another user's lock blocks submit"), Fixture.Worker->Execute(Fixture.Command));
+	TestEqual(TEXT("Worker stops after lock query"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("query locks")));
+	TestTrue(TEXT("Lock owner is reported"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("locked by Another user")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreLockQueryFailureWorkerTest, "LoreSourceControl.Workers.CheckIn.LockQueryFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreLockQueryFailureWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.Command.bShouldLockFiles = true;
+	Fixture.bLockQuerySucceeds = false;
+
+	TestFalse(TEXT("Unverified lock ownership blocks submit"), Fixture.Worker->Execute(Fixture.Command));
+	TestEqual(TEXT("Worker stops after failed lock query"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("query locks")));
+	TestTrue(TEXT("Lock query error is retained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated lock query failure")));
+	TestTrue(TEXT("Safety rejection is explained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("lock ownership could not be verified")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreStageScanFallbackWorkerTest, "LoreSourceControl.Workers.CheckIn.StageScanFallback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreStageScanFallbackWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.bScanStageSucceeds = false;
+
+	TestTrue(TEXT("Submit succeeds through stage fallback"), Fixture.Worker->Execute(Fixture.Command));
+	TestEqual(TEXT("Stage is retried without scan"), FString::Join(Fixture.StageAttempts, TEXT(" -> ")), FString(TEXT("scan -> fallback")));
+	TestEqual(TEXT("Submit continues after fallback"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> stage -> read staged paths -> commit -> refresh status")));
+	TestFalse(TEXT("Recovered scan error is not reported"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated stage scan failure")));
 	return true;
 }
 
