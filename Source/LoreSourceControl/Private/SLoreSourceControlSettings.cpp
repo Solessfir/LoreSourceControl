@@ -113,13 +113,26 @@ void SLoreSourceControlSettings::Construct(const FArguments& InArgs)
 		.Padding(2.f)
 		.VAlign(VAlign_Center)
 		[
-			SNew(SCheckBox)
-			.IsChecked(this, &SLoreSourceControlSettings::GetLockFilesCheckState)
-			.OnCheckStateChanged(this, &SLoreSourceControlSettings::OnLockFilesCheckStateChanged)
-			.ToolTipText(LOCTEXT("LockFilesTooltip", "Acquire advisory Lore locks when Unreal checks files out. Locks are released after submit or revert, and files remain editable."))
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.f)
+			.VAlign(VAlign_Center)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("LockFilesLabel", "Use Lore Locks On Check Out"))
+				.Text(LOCTEXT("LockFilesLabel", "Lore Locks"))
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(2.f)
+			.VAlign(VAlign_Center)
+			[
+				SNew(SCheckBox)
+				.IsChecked(this, &SLoreSourceControlSettings::GetLockFilesCheckState)
+				.OnCheckStateChanged(this, &SLoreSourceControlSettings::OnLockFilesCheckStateChanged)
+				.ToolTipText(LOCTEXT("LockFilesTooltip", "Acquire advisory Lore locks when Unreal checks files out. Locks are released after submit or revert, and files remain editable."))
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("LockFilesValue", "Use On Check Out"))
+				]
 			]
 		]
 
