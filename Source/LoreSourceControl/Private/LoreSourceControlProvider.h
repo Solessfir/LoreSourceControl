@@ -68,6 +68,9 @@ public:
 	/** Check if current workspace is a lore repository */
 	void CheckRepositoryStatus();
 
+	/** Reload remote and identity values after Lore has opened the repository. */
+	void RefreshRepositoryConfig();
+
 	/** Register a worker for a specific operation name */
 	void RegisterWorker(const FName& InName, const FLoreGetSourceControlWorker& InDelegate);
 

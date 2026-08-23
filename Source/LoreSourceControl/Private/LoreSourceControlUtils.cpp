@@ -437,6 +437,9 @@ namespace FLoreSourceControlUtils
 			return false;
 		}
 
+		// A write-capable Lore command can resolve and save a previously missing identity.
+		InProvider.RefreshRepositoryConfig();
+
 		if (!bQueryLocks)
 		{
 			return true;

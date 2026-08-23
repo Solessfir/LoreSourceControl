@@ -551,6 +551,29 @@ void FLoreSourceControlProvider::CheckRepositoryStatus()
 	}
 }
 
+void FLoreSourceControlProvider::RefreshRepositoryConfig()
+{
+	FString RepositoryRoot;
+	{
+		FScopeLock Lock(&CriticalSection);
+		RepositoryRoot = PathToRepositoryRoot;
+	}
+
+	FString NewRemoteUrl;
+	FString NewIdentity;
+	if (RepositoryRoot.IsEmpty() || !FLoreSourceControlUtils::ReadRepositoryConfig(RepositoryRoot, NewRemoteUrl, NewIdentity))
+	{
+		return;
+	}
+
+	FScopeLock Lock(&CriticalSection);
+	if (PathToRepositoryRoot == RepositoryRoot)
+	{
+		RemoteUrl = MoveTemp(NewRemoteUrl);
+		Identity = MoveTemp(NewIdentity);
+	}
+}
+
 void FLoreSourceControlProvider::RegisterWorker(const FName& InName, const FLoreGetSourceControlWorker& InDelegate)
 {
 	WorkersMap.Add(InName, InDelegate);
