@@ -28,6 +28,8 @@ private:
 	/** Whether we successfully found and can execute lore */
 	bool IsLoreBinaryValid() const;
 	bool IsLoreRepositoryValid() const;
+	EVisibility GetLoreVersionVisibility() const;
+	FText GetLoreVersionText() const;
 
 	/** Warning visibility if we couldn't resolve */
 	EVisibility GetWarningVisibility() const;

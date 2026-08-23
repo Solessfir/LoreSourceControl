@@ -476,6 +476,18 @@ FString FLoreSourceControlProvider::GetLoreBinaryPath() const
 	return LoreBinaryPath;
 }
 
+FString FLoreSourceControlProvider::GetLoreVersion() const
+{
+	FScopeLock Lock(&CriticalSection);
+	return LoreVersion;
+}
+
+bool FLoreSourceControlProvider::IsLoreVersionTested() const
+{
+	FScopeLock Lock(&CriticalSection);
+	return bLoreVersionTested;
+}
+
 bool FLoreSourceControlProvider::SetLoreBinaryPath(const FString& InPath)
 {
 	FScopeLock Lock(&CriticalSection);
@@ -518,6 +530,7 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 		FScopeLock Lock(&CriticalSection);
 		LoreBinaryPath = NewBinaryPath;
 		LoreVersion = NewLoreVersion;
+		bLoreVersionTested = bVersionTested;
 		bLoreAvailable = bAvailable;
 	}
 

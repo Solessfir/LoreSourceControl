@@ -9,6 +9,7 @@
 #include "EditorDirectories.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
 #include "Widgets/Images/SImage.h"
 #include "Framework/Application/SlateApplication.h"
 
@@ -28,6 +29,19 @@ void SLoreSourceControlSettings::Construct(const FArguments& InArgs)
 	ChildSlot
 	[
 		SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(2.f)
+		[
+			SNew(SBox)
+			.Visibility(this, &SLoreSourceControlSettings::GetLoreVersionVisibility)
+			[
+				MakeInfoRow(
+					LOCTEXT("VersionLabel", "Lore Version"),
+					TAttribute<FText>(this, &SLoreSourceControlSettings::GetLoreVersionText),
+					LOCTEXT("VersionLabel_Tooltip", "Version reported by the selected Lore executable"))
+			]
+		]
 
 		// Connection info: server, user, branch - only meaningful once a repository is found
 		+ SVerticalBox::Slot()
@@ -168,16 +182,30 @@ bool SLoreSourceControlSettings::IsLoreRepositoryValid() const
 	return Provider->IsLoreRepositoryFound();
 }
 
+EVisibility SLoreSourceControlSettings::GetLoreVersionVisibility() const
+{
+	return IsLoreBinaryValid() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+FText SLoreSourceControlSettings::GetLoreVersionText() const
+{
+	return FText::FromString(Provider->GetLoreVersion());
+}
+
 EVisibility SLoreSourceControlSettings::GetWarningVisibility() const
 {
-	return IsLoreBinaryValid() && IsLoreRepositoryValid() ? EVisibility::Collapsed : EVisibility::Visible;
+	return IsLoreBinaryValid() && IsLoreRepositoryValid() && Provider->IsLoreVersionTested() ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
 FText SLoreSourceControlSettings::GetWarningText() const
 {
 	if (IsLoreBinaryValid())
 	{
-		return LOCTEXT("LoreRepositoryNotFoundWarning", "Lore is installed, but this project is not inside a Lore repository. A .lore directory must exist in the project directory or one of its parents.");
+		if (!IsLoreRepositoryValid())
+		{
+			return LOCTEXT("LoreRepositoryNotFoundWarning", "Lore is installed, but this project is not inside a Lore repository. A .lore directory must exist in the project directory or one of its parents.");
+		}
+		return FText::Format(LOCTEXT("LoreVersionUntestedWarning", "Lore {0} has not been tested with this plugin. It will remain enabled, but check the Source Control message log if an operation behaves unexpectedly."), FText::FromString(Provider->GetLoreVersion()));
 	}
 
 	FString Path = Provider->GetLoreBinaryPath();
