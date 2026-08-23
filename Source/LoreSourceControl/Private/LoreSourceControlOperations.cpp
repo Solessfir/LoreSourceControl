@@ -583,7 +583,7 @@ bool FLorePrintStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 		TArray<FString>(),
 		Results,
 		InCommand.ErrorMessages,
-		/*bUseJson=*/false);
+		false);
 	InCommand.InfoMessages.Append(Results);
 	return InCommand.bCommandSuccessful;
 }

@@ -72,7 +72,7 @@ FText FLoreSourceControlProvider::GetStatusText() const
 	FScopeLock ScopeLock(&CriticalSection);
 	if (!bLoreAvailable)
 	{
-		return LOCTEXT("LoreStatusNotAvailable", "Lore is not available.\n\nTo configure: Project Settings > Editor > Lore Source Control (set 'Lore Path' or leave empty for auto-detect).");
+		return LOCTEXT("LoreStatusNotAvailable", "Lore is not available.\n\nTo configure: Project Settings > Plugins > Lore Source Control (set 'Lore Path' or leave empty for auto-detect).");
 	}
 
 	if (!bLoreRepositoryFound)
@@ -327,9 +327,7 @@ bool FLoreSourceControlProvider::UsesUncontrolledChangelists() const
 
 bool FLoreSourceControlProvider::UsesCheckout() const
 {
-	// Also the master switch gating the per-asset "Check Out" button (e.g. FEditorFileUtils::IsCheckOutSelectedDisabled), so it must stay true - Check Out is actively used here.
-	// Tradeoff: the Perforce-style "Check Out Modified Files" bulk dialog also becomes available.
-	return true;
+	return FLoreSourceControlUtils::ShouldLockFiles();
 }
 
 bool FLoreSourceControlProvider::UsesFileRevisions() const
@@ -383,7 +381,7 @@ ECommandResult::Type FLoreSourceControlProvider::Login(const FString& InPassword
 		const FText Error = LOCTEXT("LoginFailedNoLorePath", "Cannot accept settings: Lore executable path is not resolved or not valid. Please set a valid path in the settings above.");
 		FMessageLog SourceControlLog("SourceControl");
 		SourceControlLog.Error(Error);
-		SourceControlLog.Notify(Error, EMessageSeverity::Error, /*bForce=*/true);
+		SourceControlLog.Notify(Error, EMessageSeverity::Error, true);
 
 		if (InOperationCompleteDelegate.IsBound())
 		{
@@ -401,7 +399,7 @@ ECommandResult::Type FLoreSourceControlProvider::Login(const FString& InPassword
 		const FText Error = LOCTEXT("LoginFailedNoRepository", "Cannot accept settings: this project is not inside a Lore repository. Make sure a .lore directory exists in the project directory or one of its parents.");
 		FMessageLog SourceControlLog("SourceControl");
 		SourceControlLog.Error(Error);
-		SourceControlLog.Notify(Error, EMessageSeverity::Error, /*bForce=*/true);
+		SourceControlLog.Notify(Error, EMessageSeverity::Error, true);
 
 		if (InOperationCompleteDelegate.IsBound())
 		{
@@ -551,7 +549,7 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 					"Current path/command: {0}\n\n"
 					"Make sure the 'lore' command is available in your PATH, or install it to the platform default location ({1}).\n"
 					"Download it from https://github.com/EpicGames/lore/releases.\n"
-					"You can also explicitly set the path to the lore executable in Project Settings > Editor > Lore Source Control."),
+					"You can also explicitly set the path to the lore executable in Project Settings > Plugins > Lore Source Control."),
 				FText::FromString(NewBinaryPath.IsEmpty() ? TEXT("<none>") : NewBinaryPath),
 				FText::FromString(DefaultLocationText)
 			)

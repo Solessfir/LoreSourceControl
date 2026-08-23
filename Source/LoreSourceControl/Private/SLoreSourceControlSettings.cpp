@@ -5,6 +5,7 @@
 #include "LoreSourceControlUtils.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SFilePathPicker.h"
 #include "EditorDirectories.h"
 #include "Styling/AppStyle.h"
@@ -107,6 +108,29 @@ void SLoreSourceControlSettings::Construct(const FArguments& InArgs)
 			]
 		]
 
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(2.f)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("LockFilesLabel", "Use Lore Locks On Check Out"))
+				.ToolTipText(LOCTEXT("LockFilesTooltip", "Acquire advisory Lore locks when Unreal checks files out. Locks are released after submit or revert, and files remain editable."))
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(2.f)
+			[
+				SNew(SCheckBox)
+				.IsChecked(this, &SLoreSourceControlSettings::GetLockFilesCheckState)
+				.OnCheckStateChanged(this, &SLoreSourceControlSettings::OnLockFilesCheckStateChanged)
+				.ToolTipText(LOCTEXT("LockFilesTooltip", "Acquire advisory Lore locks when Unreal checks files out. Locks are released after submit or revert, and files remain editable."))
+			]
+		]
+
 		// Warning area if not valid
 		+ SVerticalBox::Slot()
 		.AutoHeight()
@@ -170,6 +194,16 @@ void SLoreSourceControlSettings::OnBinaryPathPicked(const FString& PickedPath) c
 	Provider->SetLoreBinaryPath(PickedPath);
 	Provider->CheckLoreAvailability();
 	Provider->CheckRepositoryStatus();
+}
+
+ECheckBoxState SLoreSourceControlSettings::GetLockFilesCheckState() const
+{
+	return FLoreSourceControlUtils::ShouldLockFiles() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+void SLoreSourceControlSettings::OnLockFilesCheckStateChanged(ECheckBoxState NewState) const
+{
+	FLoreSourceControlUtils::SetShouldLockFiles(NewState == ECheckBoxState::Checked);
 }
 
 bool SLoreSourceControlSettings::IsLoreBinaryValid() const

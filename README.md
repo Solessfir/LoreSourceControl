@@ -45,7 +45,7 @@ Prebuilt binary available on [Fab](https://fab.com/s/34bd22b20f98) if you'd like
 **Project Settings → Plugins → Lore Source Control**:
 - **Lore Path** - override the `lore` binary location. Leave empty to auto-detect (PATH, then
   common install locations).
-- **Lock Files On Check Out** - toggle whether Check Out acquires/releases a Lore lock.
+- **Use Lore Locks On Check Out** - acquire advisory Lore locks during Check Out. Files remain editable, and locks are released after submit or revert.
 
 ## Console Commands
 

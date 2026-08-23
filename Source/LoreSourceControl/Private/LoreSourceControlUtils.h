@@ -145,7 +145,7 @@ namespace FLoreSourceControlUtils
 	bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages);
 
 	/**
-	 * Settings using UDeveloperSettings (Project Settings > Editor > Lore Source Control).
+	 * Settings using UDeveloperSettings (Project Settings > Plugins > Lore Source Control).
 	 * These replace the old manual ini file.
 	 */
 	void LoadSettings(FString& OutLoreBinaryPath);
@@ -165,6 +165,7 @@ namespace FLoreSourceControlUtils
 	 * Whether Check Out/Revert/Submit should actually acquire/release Lore locks (ULoreSourceControlSettings::bLockFiles).
 	 */
 	bool ShouldLockFiles();
+	void SetShouldLockFiles(bool bShouldLockFiles);
 
 	/**
 	 * Update the provider's cached states from worker results.

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Types/SlateEnums.h"
 #include "Widgets/SCompoundWidget.h"
 
 class FLoreSourceControlProvider;
@@ -24,6 +25,8 @@ private:
 
 	/** Called when user picks a new path via the file picker */
 	void OnBinaryPathPicked(const FString& PickedPath) const;
+	ECheckBoxState GetLockFilesCheckState() const;
+	void OnLockFilesCheckStateChanged(ECheckBoxState NewState) const;
 
 	/** Whether we successfully found and can execute lore */
 	bool IsLoreBinaryValid() const;

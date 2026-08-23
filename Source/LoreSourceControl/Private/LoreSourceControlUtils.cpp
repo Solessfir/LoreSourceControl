@@ -1202,6 +1202,15 @@ namespace FLoreSourceControlUtils
 		return true;
 	}
 
+	void SetShouldLockFiles(bool bShouldLockFiles)
+	{
+		if (ULoreSourceControlSettings* Settings = GetMutableDefault<ULoreSourceControlSettings>())
+		{
+			Settings->bLockFiles = bShouldLockFiles;
+			Settings->SaveConfig();
+		}
+	}
+
 	void LoadSettings(FString& OutLoreBinaryPath)
 	{
 		// New preferred storage: UDeveloperSettings (Project Settings)

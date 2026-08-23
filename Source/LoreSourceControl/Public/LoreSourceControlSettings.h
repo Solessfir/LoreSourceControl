@@ -21,7 +21,8 @@ public:
     UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Lore Path"), Category = "Lore")
     FFilePath BinaryPath;
 
-    UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Lock Files On Check Out"), Category = "Lore")
+    /** Acquire advisory Lore locks when Unreal checks files out. Locks are released after submit or revert, and files remain editable. */
+    UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Use Lore Locks On Check Out"), Category = "Lore")
     bool bLockFiles = true;
 
     /** Returns the user-configured binary path (can be empty = auto-detect) */
