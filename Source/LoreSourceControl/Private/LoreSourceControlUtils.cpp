@@ -351,6 +351,65 @@ namespace FLoreSourceControlUtils
 		return false;
 	}
 
+	void ParseCommandErrors(const TArray<FString>& InResults, TArray<FString>& OutErrorMessages)
+	{
+		for (const FString& Line : InResults)
+		{
+			TSharedPtr<FJsonObject> JsonObj;
+			if (!ParseJsonLine(Line.TrimStartAndEnd(), JsonObj))
+			{
+				continue;
+			}
+
+			FString TagName;
+			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName))
+			{
+				continue;
+			}
+
+			const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
+			if (!Data)
+			{
+				continue;
+			}
+
+			if (TagName == TEXT("complete"))
+			{
+				if (const FJsonObject* ErrorObj = GetObjectField(*Data, TEXT("error")))
+				{
+					int32 ErrorCode = 0;
+					if (ErrorObj->TryGetNumberField(TEXT("errorCode"), ErrorCode) && ErrorCode != 0)
+					{
+						FString ErrorMessage;
+						ErrorObj->TryGetStringField(TEXT("message"), ErrorMessage);
+						OutErrorMessages.Add(FString::Printf(TEXT("lore: %s"), ErrorMessage.IsEmpty() ? TEXT("command reported a failure") : *ErrorMessage));
+					}
+				}
+			}
+			else if (TagName == TEXT("log"))
+			{
+				FString Level;
+				if (Data->TryGetStringField(TEXT("level"), Level) && Level == TEXT("error"))
+				{
+					FString LogMessage;
+					Data->TryGetStringField(TEXT("message"), LogMessage);
+					if (!LogMessage.IsEmpty())
+					{
+						OutErrorMessages.Add(FString::Printf(TEXT("lore: %s"), *LogMessage));
+					}
+				}
+			}
+		}
+	}
+
+	void RemoveOptionalLockQueryErrors(bool bLockQuerySucceeded, TArray<FString>& InOutErrorMessages)
+	{
+		if (bLockQuerySucceeded)
+		{
+			InOutErrorMessages.RemoveAll([](const FString& Error) { return Error.Contains(TEXT("authentication requires a configured auth endpoint")); });
+		}
+	}
+
 	bool RunLoreCommand(const FString& InCommand, const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages, bool bUseJson)
 	{
 		int32 ReturnCode = 0;
@@ -402,53 +461,7 @@ namespace FLoreSourceControlUtils
 
 		if (bUseJson)
 		{
-			for (const FString& Line : OutResults)
-			{
-				TSharedPtr<FJsonObject> JsonObj;
-				if (!ParseJsonLine(Line.TrimStartAndEnd(), JsonObj))
-				{
-					continue;
-				}
-
-				FString TagName;
-				if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName))
-				{
-					continue;
-				}
-
-				const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
-				if (!Data)
-				{
-					continue;
-				}
-
-				if (TagName == TEXT("complete"))
-				{
-					if (const FJsonObject* ErrorObj = GetObjectField(*Data, TEXT("error")))
-					{
-						int32 ErrorCode = 0;
-						if (ErrorObj->TryGetNumberField(TEXT("errorCode"), ErrorCode) && ErrorCode != 0)
-						{
-							FString ErrorMessage;
-							ErrorObj->TryGetStringField(TEXT("message"), ErrorMessage);
-							OutErrorMessages.Add(FString::Printf(TEXT("lore: %s"), ErrorMessage.IsEmpty() ? TEXT("command reported a failure") : *ErrorMessage));
-						}
-					}
-				}
-				else if (TagName == TEXT("log"))
-				{
-					FString Level;
-					if (Data->TryGetStringField(TEXT("level"), Level) && Level == TEXT("error"))
-					{
-						FString LogMessage;
-						Data->TryGetStringField(TEXT("message"), LogMessage);
-						if (!LogMessage.IsEmpty())
-						{
-							OutErrorMessages.Add(FString::Printf(TEXT("lore: %s"), *LogMessage));
-						}
-					}
-				}
-			}
+			ParseCommandErrors(OutResults, OutErrorMessages);
 		}
 
 		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] ReturnCode=%d, Stdout:\n%s"), ReturnCode, *Results);
@@ -742,14 +755,8 @@ namespace FLoreSourceControlUtils
 		}
 	}
 
-	bool RunGetHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, TArray<FString>& OutErrorMessages, FLoreSourceControlHistory& OutHistory)
+	void ParseHistoryResults(const TArray<FString>& Results, const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, FLoreSourceControlHistory& OutHistory)
 	{
-		TArray<FString> Files;
-		Files.Add(InFile);
-
-		TArray<FString> Results;
-		const bool bOk = RunLoreCommand(TEXT("file history"), InLoreBinary, InRepositoryRoot, TArray<FString>(), Files, Results, OutErrorMessages);
-
 		// Lore reports each revision as a "fileHistory" event followed by zero or more related "metadata" events for its message, creator, timestamp, and other fields.
 		// Flush the entry only when the next "fileHistory" event or the end of the results is reached.
 		TSharedPtr<FLoreSourceControlRevision> Current;
@@ -839,20 +846,21 @@ namespace FLoreSourceControlUtils
 		{
 			OutHistory.Add(Current.ToSharedRef());
 		}
+	}
 
+	bool RunGetHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, TArray<FString>& OutErrorMessages, FLoreSourceControlHistory& OutHistory)
+	{
+		TArray<FString> Files;
+		Files.Add(InFile);
+
+		TArray<FString> Results;
+		const bool bOk = RunLoreCommand(TEXT("file history"), InLoreBinary, InRepositoryRoot, TArray<FString>(), Files, Results, OutErrorMessages);
+		ParseHistoryResults(Results, InLoreBinary, InRepositoryRoot, InFile, OutHistory);
 		return bOk;
 	}
 
-	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches, TArray<FString>* OutErrorMessages)
+	void ParseBranchResults(const TArray<FString>& Results, TArray<FLoreBranchInfo>& OutBranches)
 	{
-		TArray<FString> Results;
-		TArray<FString> Errors;
-		const bool bOk = RunLoreCommand(TEXT("branch list"), InLoreBinary, InRepositoryRoot, TArray<FString>(), TArray<FString>(), Results, Errors);
-		if (OutErrorMessages)
-		{
-			OutErrorMessages->Append(Errors);
-		}
-
 		for (const FString& Line : Results)
 		{
 			TSharedPtr<FJsonObject> JsonObj;
@@ -894,7 +902,19 @@ namespace FLoreSourceControlUtils
 				OutBranches.Add(FLoreBranchInfo{ Name, bIsCurrent });
 			}
 		}
+	}
 
+	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches, TArray<FString>* OutErrorMessages)
+	{
+		TArray<FString> Results;
+		TArray<FString> Errors;
+		const bool bOk = RunLoreCommand(TEXT("branch list"), InLoreBinary, InRepositoryRoot, TArray<FString>(), TArray<FString>(), Results, Errors);
+		if (OutErrorMessages)
+		{
+			OutErrorMessages->Append(Errors);
+		}
+
+		ParseBranchResults(Results, OutBranches);
 		return bOk;
 	}
 
@@ -1037,31 +1057,8 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages)
+	void ParseLockResults(const TArray<FString>& Results, const FString& InRepositoryRoot, TMap<FString, FLoreLockOwner>& OutLockedBy)
 	{
-		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the broad Connect/Sync scan passes) silently matches nothing.
-		// "lock query" filtered by --branch lists every lock on the branch regardless of path - what we actually want either way.
-		const FString CurrentBranch = InProvider.GetBranchName();
-
-		TArray<FString> Results;
-		TArray<FString> Errors;
-		TArray<FString> Params;
-		if (!CurrentBranch.IsEmpty())
-		{
-			Params.Add(FString::Printf(TEXT("--branch=%s"), *QuoteCommandLineArgument(CurrentBranch)));
-		}
-
-		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);
-		if (bOk)
-		{
-			// Lore resolves lock owner display names as an optional follow-up. Local servers without an auth endpoint still return valid lock data.
-			Errors.RemoveAll([](const FString& Error) { return Error.Contains(TEXT("authentication requires a configured auth endpoint")); });
-		}
-		if (OutErrorMessages)
-		{
-			OutErrorMessages->Append(Errors);
-		}
-
 		FString RepoAbs = FPaths::ConvertRelativePathToFull(InRepositoryRoot);
 		TMap<FString, FString> OwnerNames;
 
@@ -1123,7 +1120,30 @@ namespace FLoreSourceControlUtils
 				Lock.Value.DisplayName = *ResolvedName;
 			}
 		}
+	}
 
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages)
+	{
+		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the broad Connect/Sync scan passes) silently matches nothing.
+		// "lock query" filtered by --branch lists every lock on the branch regardless of path - what we actually want either way.
+		const FString CurrentBranch = InProvider.GetBranchName();
+
+		TArray<FString> Results;
+		TArray<FString> Errors;
+		TArray<FString> Params;
+		if (!CurrentBranch.IsEmpty())
+		{
+			Params.Add(FString::Printf(TEXT("--branch=%s"), *QuoteCommandLineArgument(CurrentBranch)));
+		}
+
+		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);
+		RemoveOptionalLockQueryErrors(bOk, Errors);
+		if (OutErrorMessages)
+		{
+			OutErrorMessages->Append(Errors);
+		}
+
+		ParseLockResults(Results, InRepositoryRoot, OutLockedBy);
 		return bOk;
 	}
 

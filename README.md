@@ -67,6 +67,14 @@ Lore does not use a separate `init` command. The offline form above creates the 
 - **`LoreStatus`** - force-refreshes Lore source control status for the project and prints Lore's human-readable status to the log.
 - **`LoreCommit`** - opens the Submit Files dialog to stage and commit pending changes, then pushes when a remote is configured.
 
+## Automated Tests
+
+Parser and behavior tests live in the separate `LoreSourceControlTests` editor module. Run the `LoreSourceControl` test group from Unreal's Session Frontend Automation tab or from the command line:
+
+```text
+UnrealEditor-Cmd.exe YourProject.uproject -unattended -nullrhi -ExecCmds="Automation RunTests LoreSourceControl; Quit" -TestExit="Automation Test Queue Empty"
+```
+
 ## Notes
 
 - **Locking is advisory, not enforced.** A lock is a courtesy signal to teammates, not a hard guarantee. Lore's server never rejects a commit or push from someone who skipped locking entirely, and files stay editable regardless of lock state, matching Git's model rather than Perforce's.

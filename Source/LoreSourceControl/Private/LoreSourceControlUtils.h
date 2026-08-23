@@ -9,14 +9,14 @@ class FLoreSourceControlState;
 class FLoreSourceControlProvider;
 
 /** One entry from "lore branch list" */
-struct FLoreBranchInfo
+struct LORESOURCECONTROL_API FLoreBranchInfo
 {
 	FString Name;
 	bool bIsCurrent = false;
 };
 
 /** Repository-level facts extracted from one "lore status" run, alongside the per-file states. */
-struct FLoreStatusSummary
+struct LORESOURCECONTROL_API FLoreStatusSummary
 {
 	/** Current branch, from the "repositoryStatusRevision" event (empty if not reported) */
 	FString BranchName;
@@ -29,7 +29,7 @@ struct FLoreStatusSummary
 };
 
 /** A Lore lock owner, retaining both the stable identity and its human-readable name. */
-struct FLoreLockOwner
+struct LORESOURCECONTROL_API FLoreLockOwner
 {
 	FString Identity;
 	FString DisplayName;
@@ -43,7 +43,7 @@ struct FLoreLockOwner
 namespace FLoreSourceControlUtils
 {
 	/** Quote one command-line argument without changing its value. */
-	FString QuoteCommandLineArgument(const FString& InArgument);
+	LORESOURCECONTROL_API FString QuoteCommandLineArgument(const FString& InArgument);
 
 	/**
 	 * Returns the effective path (or command name) to use for the lore executable.
@@ -93,7 +93,22 @@ namespace FLoreSourceControlUtils
 	 * Parser for lore status --json output. Populates per-file states and, if OutSummary is given,
 	 * the repository-level facts (branch name, dirty/behind-remote flags) from the same single pass.
 	 */
-	void ParseStatusResults(const FString& InResults, const TArray<FString>& InFiles, const FString& InRepositoryRoot, TArray<FLoreSourceControlState>& OutStates, FLoreStatusSummary* OutSummary = nullptr);
+	LORESOURCECONTROL_API void ParseStatusResults(const FString& InResults, const TArray<FString>& InFiles, const FString& InRepositoryRoot, TArray<FLoreSourceControlState>& OutStates, FLoreStatusSummary* OutSummary = nullptr);
+
+	/** Parse structured error events emitted by a Lore command. */
+	LORESOURCECONTROL_API void ParseCommandErrors(const TArray<FString>& InResults, TArray<FString>& OutErrorMessages);
+
+	/** Remove the optional owner-name lookup failure emitted after a successful lock query. */
+	LORESOURCECONTROL_API void RemoveOptionalLockQueryErrors(bool bLockQuerySucceeded, TArray<FString>& InOutErrorMessages);
+
+	/** Parse Lore file-history events and their following metadata events. */
+	LORESOURCECONTROL_API void ParseHistoryResults(const TArray<FString>& InResults, const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, FLoreSourceControlHistory& OutHistory);
+
+	/** Parse and deduplicate Lore branch-list entries. */
+	LORESOURCECONTROL_API void ParseBranchResults(const TArray<FString>& InResults, TArray<FLoreBranchInfo>& OutBranches);
+
+	/** Parse lock-query results and optional owner display names. */
+	LORESOURCECONTROL_API void ParseLockResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TMap<FString, FLoreLockOwner>& OutLockedBy);
 
 	/**
 	 * Run `lore file history <path>` and parse it into revision history entries, combining each
@@ -125,7 +140,7 @@ namespace FLoreSourceControlUtils
 	 * (returns true - needs an editor restart) vs plain Content paths (returned via OutContentPaths,
 	 * safe to hot-reload). Shared by branch switch and sync, which both need this same classification.
 	 */
-	bool ClassifyChangedPaths(const TArray<FString>& InPaths, TArray<FString>& OutContentPaths);
+	LORESOURCECONTROL_API bool ClassifyChangedPaths(const TArray<FString>& InPaths, TArray<FString>& OutContentPaths);
 
 	/**
 	 * Run `lore sync` and classify the "revisionSyncFile" events it reports the same way a branch

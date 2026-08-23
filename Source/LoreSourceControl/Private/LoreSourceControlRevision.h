@@ -6,7 +6,7 @@
 #include "ISourceControlRevision.h"
 
 /** One entry in a file's history, backed by a single Lore revision. */
-class FLoreSourceControlRevision : public ISourceControlRevision
+class LORESOURCECONTROL_API FLoreSourceControlRevision : public ISourceControlRevision
 {
 public:
 	//~ ISourceControlRevision interface
