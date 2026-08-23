@@ -30,11 +30,10 @@ namespace
 				Calls.Add(InCommand);
 				if (InCommand == TEXT("stage"))
 				{
-					const bool bScansFiles = InParameters.Contains(TEXT("--scan"));
-					StageAttempts.Add(bScansFiles ? TEXT("scan") : TEXT("fallback"));
-					if (bScansFiles && !bScanStageSucceeds)
+					StageParameters = InParameters;
+					if (!bStageSucceeds)
 					{
-						OutErrors.Add(TEXT("Simulated stage scan failure."));
+						OutErrors.Add(TEXT("Simulated stage failure."));
 						return false;
 					}
 				}
@@ -77,11 +76,11 @@ namespace
 		FLoreSourceControlCommand Command;
 		TArray<FString> Calls;
 		TArray<FString> CommitParameters;
-		TArray<FString> StageAttempts;
+		TArray<FString> StageParameters;
 		TArray<FString> StagedFiles;
 		TMap<FString, FLoreLockOwner> LockedBy;
 		bool bPushSucceeds = true;
-		bool bScanStageSucceeds = true;
+		bool bStageSucceeds = true;
 		bool bLockQuerySucceeds = true;
 	};
 
@@ -177,17 +176,18 @@ bool FLoreLockQueryFailureWorkerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreStageScanFallbackWorkerTest, "LoreSourceControl.Workers.CheckIn.StageScanFallback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreStageFailureWorkerTest, "LoreSourceControl.Workers.CheckIn.StageFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FLoreStageScanFallbackWorkerTest::RunTest(const FString& Parameters)
+bool FLoreStageFailureWorkerTest::RunTest(const FString& Parameters)
 {
 	FSubmitWorkerFixture Fixture;
-	Fixture.bScanStageSucceeds = false;
+	Fixture.bStageSucceeds = false;
 
-	TestTrue(TEXT("Submit succeeds through stage fallback"), Fixture.Worker->Execute(Fixture.Command));
-	TestEqual(TEXT("Stage is retried without scan"), FString::Join(Fixture.StageAttempts, TEXT(" -> ")), FString(TEXT("scan -> fallback")));
-	TestEqual(TEXT("Submit continues after fallback"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> stage -> read staged paths -> commit -> refresh status")));
-	TestFalse(TEXT("Recovered scan error is not reported"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated stage scan failure")));
+	TestFalse(TEXT("Stage failure blocks submit"), Fixture.Worker->Execute(Fixture.Command));
+	TestEqual(TEXT("Stage is attempted once"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage")));
+	TestEqual(TEXT("Stage uses filesystem scanning"), FString::Join(Fixture.StageParameters, TEXT(" ")), FString(TEXT("--scan")));
+	TestTrue(TEXT("Lore stage error is retained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated stage failure")));
+	TestTrue(TEXT("Submit rejection is explained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("selected files could not be staged")));
 	return true;
 }
 

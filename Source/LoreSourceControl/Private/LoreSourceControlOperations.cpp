@@ -129,16 +129,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	TArray<FString> StageErrors;
 	TArray<FString> StageResults;
-	bool bStaged = InCommand.RunLoreCommand(TEXT("stage"), StageParams, InCommand.Files, StageResults, StageErrors);
-	if (!bStaged)
-	{
-		// Try without --scan as fallback
-		TArray<FString> FallbackResults;
-		TArray<FString> FallbackErrors;
-		bStaged = InCommand.RunLoreCommand(TEXT("stage"), TArray<FString>(), InCommand.Files, FallbackResults, FallbackErrors);
-		StageResults.Append(FallbackResults);
-		StageErrors.Append(FallbackErrors);
-	}
+	const bool bStaged = InCommand.RunLoreCommand(TEXT("stage"), StageParams, InCommand.Files, StageResults, StageErrors);
 	InCommand.InfoMessages.Append(StageResults);
 	if (!bStaged)
 	{
