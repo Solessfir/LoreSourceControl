@@ -140,8 +140,8 @@ namespace FLoreSourceControlUtils
 	 */
 	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
 
-	/** Return every staged file in the repository, as normalized absolute paths. */
-	bool RunGetStagedFiles(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutErrorMessages);
+	/** Return every staged file and directory in the repository as normalized absolute paths. */
+	bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages);
 
 	/**
 	 * Settings using UDeveloperSettings (Project Settings > Editor > Lore Source Control).

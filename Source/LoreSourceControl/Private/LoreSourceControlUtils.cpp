@@ -1025,7 +1025,7 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool RunGetStagedFiles(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutErrorMessages)
+	bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages)
 	{
 		TArray<FString> Results;
 		const bool bOk = RunLoreCommand(TEXT("status"), InLoreBinary, InRepositoryRoot, TArray<FString>(), TArray<FString>(), Results, OutErrorMessages);
@@ -1057,14 +1057,22 @@ namespace FLoreSourceControlUtils
 			Data->TryGetBoolField(TEXT("flagStaged"), bStaged);
 			Data->TryGetStringField(TEXT("type"), Type);
 			Data->TryGetStringField(TEXT("path"), Path);
-			if (!bStaged || Type.Equals(TEXT("directory"), ESearchCase::IgnoreCase) || Path.IsEmpty())
+			if (!bStaged || Path.IsEmpty())
 			{
 				continue;
 			}
 
 			FString AbsolutePath = FPaths::Combine(RepoAbs, Path);
 			FPaths::NormalizeFilename(AbsolutePath);
-			OutStagedFiles.AddUnique(AbsolutePath.Replace(TEXT("\\"), TEXT("/")));
+			AbsolutePath.ReplaceInline(TEXT("\\"), TEXT("/"));
+			if (Type.Equals(TEXT("directory"), ESearchCase::IgnoreCase))
+			{
+				OutStagedDirectories.AddUnique(AbsolutePath);
+			}
+			else
+			{
+				OutStagedFiles.AddUnique(AbsolutePath);
+			}
 		}
 
 		return bOk;

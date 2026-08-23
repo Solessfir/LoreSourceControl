@@ -171,11 +171,12 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	}
 
 	// `lore commit` commits the entire stage.
-	// Verify the stage contains no unrelated file before invoking it, preserving the user's existing stage instead of silently committing extra work.
+	// Verify the stage contains no unrelated path before invoking it, preserving the user's existing stage instead of silently committing extra work.
 	TArray<FString> StagedFiles;
-	if (!FLoreSourceControlUtils::RunGetStagedFiles(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StagedFiles, InCommand.ErrorMessages))
+	TArray<FString> StagedDirectories;
+	if (!FLoreSourceControlUtils::RunGetStagedPaths(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StagedFiles, StagedDirectories, InCommand.ErrorMessages))
 	{
-		InCommand.ErrorMessages.Add(TEXT("Submit aborted because the staged file set could not be verified."));
+		InCommand.ErrorMessages.Add(TEXT("Submit aborted because the staged path set could not be verified."));
 		return false;
 	}
 
@@ -185,21 +186,37 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		SelectedPaths.Add(NormalizeComparisonPath(File));
 	}
 
-	TArray<FString> UnexpectedStagedFiles;
+	TArray<FString> UnexpectedStagedPaths;
 	for (const FString& File : StagedFiles)
 	{
 		if (!SelectedPaths.Contains(NormalizeComparisonPath(File)))
 		{
-			UnexpectedStagedFiles.Add(File);
+			UnexpectedStagedPaths.Add(File);
 		}
 	}
 
-	if (!UnexpectedStagedFiles.IsEmpty())
+	for (const FString& Directory : StagedDirectories)
 	{
-		InCommand.ErrorMessages.Add(TEXT("Submit aborted: Lore's stage also contains files outside the current selection:"));
-		for (const FString& File : UnexpectedStagedFiles)
+		const FString NormalizedDirectory = NormalizeComparisonPath(Directory);
+		const FString DirectoryPrefix = NormalizedDirectory.EndsWith(TEXT("/")) ? NormalizedDirectory : NormalizedDirectory + TEXT("/");
+		bool bContainsSelectedPath = SelectedPaths.Contains(NormalizedDirectory);
+		for (const FString& SelectedPath : SelectedPaths)
 		{
-			InCommand.ErrorMessages.Add(FString::Printf(TEXT("  %s"), *File));
+			bContainsSelectedPath |= SelectedPath.StartsWith(DirectoryPrefix);
+		}
+
+		if (!bContainsSelectedPath)
+		{
+			UnexpectedStagedPaths.Add(Directory);
+		}
+	}
+
+	if (!UnexpectedStagedPaths.IsEmpty())
+	{
+		InCommand.ErrorMessages.Add(TEXT("Submit aborted: Lore's stage also contains paths outside the current selection:"));
+		for (const FString& Path : UnexpectedStagedPaths)
+		{
+			InCommand.ErrorMessages.Add(FString::Printf(TEXT("  %s"), *Path));
 		}
 		return false;
 	}
