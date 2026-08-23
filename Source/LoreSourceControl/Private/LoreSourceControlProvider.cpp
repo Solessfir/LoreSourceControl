@@ -98,7 +98,7 @@ TMap<ISourceControlProvider::EStatus, FString> FLoreSourceControlProvider::GetSt
 	TMap<EStatus, FString> Result;
 	Result.Add(EStatus::Enabled, TEXT("Yes"));
 	Result.Add(EStatus::Connected, bLoreAvailable && bLoreRepositoryFound ? TEXT("Yes") : TEXT("No"));
-	Result.Add(EStatus::ScmVersion, TEXT("lore (Epic)"));
+	Result.Add(EStatus::ScmVersion, LoreVersion.IsEmpty() ? TEXT("lore (Epic)") : FString::Printf(TEXT("lore %s"), *LoreVersion));
 	Result.Add(EStatus::PluginVersion, TEXT("0.1"));
 	Result.Add(EStatus::WorkspacePath, PathToRepositoryRoot);
 	Result.Add(EStatus::Branch, BranchName);
@@ -474,17 +474,19 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 	const FString UserPath = FLoreSourceControlUtils::GetUserConfiguredLoreBinaryPath();
 
 	FString NewBinaryPath;
+	FString NewLoreVersion;
+	bool bVersionTested = false;
 	bool bAvailable;
 
 	if (!UserPath.IsEmpty())
 	{
 		NewBinaryPath = UserPath;
-		bAvailable = FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath);
+		bAvailable = FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion, &bVersionTested);
 	}
 	else
 	{
 		NewBinaryPath = FLoreSourceControlUtils::FindLoreBinaryPath();
-		bAvailable = !NewBinaryPath.IsEmpty() && FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath);
+		bAvailable = !NewBinaryPath.IsEmpty() && FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion, &bVersionTested);
 
 		// Auto-apply a successfully discovered path so the setting is populated and the user doesn't have to manage "leave empty for auto-detection".
 		if (bAvailable)
@@ -496,6 +498,7 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 	{
 		FScopeLock Lock(&CriticalSection);
 		LoreBinaryPath = NewBinaryPath;
+		LoreVersion = NewLoreVersion;
 		bLoreAvailable = bAvailable;
 	}
 
@@ -521,6 +524,10 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 				FText::FromString(DefaultLocationText)
 			)
 		);
+	}
+	else if (!bVersionTested)
+	{
+		FMessageLog("SourceControl").Warning(FText::Format(LOCTEXT("LoreVersionUntested", "Lore {0} has not been tested with this plugin. Continuing because the Lore CLI is available."), FText::FromString(NewLoreVersion)));
 	}
 }
 

@@ -63,10 +63,8 @@ namespace FLoreSourceControlUtils
 	 */
 	bool ReadRepositoryConfig(const FString& InRepositoryRoot, FString& OutRemoteUrl, FString& OutIdentity);
 
-	/**
-	 * Run "lore --version" to verify the binary works.
-	 */
-	bool CheckLoreAvailability(const FString& InLoreBinaryPath);
+	/** Run "lore --version", parse the reported version, and indicate whether it is in the tested range. */
+	bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion = nullptr, bool* OutTestedVersion = nullptr);
 
 	/**
 	 * Find the lore repository root by walking up looking for a ".lore" directory.

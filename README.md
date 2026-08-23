@@ -22,7 +22,7 @@ Unreal Engine plugin implementing `ISourceControlProvider` for [lore](https://gi
 
 ## Requirements
 
-- Lore CLI (`lore`) available, either on your `PATH` or at an explicit path set in Project Settings.
+- Lore CLI available, either on your `PATH` or at an explicit path set in Project Settings. Versions outside the tested 0.8.6 through 0.8.x range are allowed with a warning.
 - A Lore repository checked out (contains a `.lore` folder at the root), with `remote_url` and
   `identity` configured in `.lore/config.toml` if you want push/pull and commits to work.
 

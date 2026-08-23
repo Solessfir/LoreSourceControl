@@ -121,8 +121,45 @@ namespace FLoreSourceControlUtils
 		return Paths;
 	}
 
-	static bool TryExecuteLoreVersion(const FString& Candidate, FString& OutUsedCommand)
+	static bool ParseLoreVersion(const FString& InOutput, FString& OutVersion, int32& OutMajor, int32& OutMinor, int32& OutPatch)
 	{
+		TArray<FString> Tokens;
+		InOutput.ParseIntoArrayWS(Tokens);
+		if (Tokens.Num() < 2 || !Tokens[0].Equals(TEXT("lore"), ESearchCase::IgnoreCase))
+		{
+			return false;
+		}
+
+		OutVersion = Tokens[1];
+		FString NumericVersion = OutVersion;
+		int32 SuffixIndex = NumericVersion.Len();
+		const int32 DashIndex = NumericVersion.Find(TEXT("-"));
+		const int32 PlusIndex = NumericVersion.Find(TEXT("+"));
+		if (DashIndex != INDEX_NONE)
+		{
+			SuffixIndex = FMath::Min(SuffixIndex, DashIndex);
+		}
+		if (PlusIndex != INDEX_NONE)
+		{
+			SuffixIndex = FMath::Min(SuffixIndex, PlusIndex);
+		}
+		NumericVersion.LeftInline(SuffixIndex);
+
+		TArray<FString> Parts;
+		NumericVersion.ParseIntoArray(Parts, TEXT("."), false);
+		return Parts.Num() == 3
+			&& LexTryParseString(OutMajor, *Parts[0])
+			&& LexTryParseString(OutMinor, *Parts[1])
+			&& LexTryParseString(OutPatch, *Parts[2]);
+	}
+
+	static bool ProbeLoreVersion(const FString& Candidate, FString& OutVersion, bool* OutTestedVersion = nullptr)
+	{
+		if (OutTestedVersion)
+		{
+			*OutTestedVersion = false;
+		}
+
 		if (Candidate.IsEmpty())
 		{
 			return false;
@@ -134,13 +171,31 @@ namespace FLoreSourceControlUtils
 
 		FPlatformProcess::ExecProcess(*Candidate, TEXT("--version"), &ReturnCode, &OutResults, &OutErrors);
 
-		if (ReturnCode == 0)
+		int32 Major = 0;
+		int32 Minor = 0;
+		int32 Patch = 0;
+		if (ReturnCode == 0 && ParseLoreVersion(OutResults, OutVersion, Major, Minor, Patch))
 		{
-			OutUsedCommand = Candidate;
+			if (OutTestedVersion)
+			{
+				*OutTestedVersion = Major == 0 && Minor == 8 && Patch >= 6;
+			}
 			return true;
 		}
 
 		return false;
+	}
+
+	static bool TryExecuteLoreVersion(const FString& Candidate, FString& OutUsedCommand)
+	{
+		FString Version;
+		if (!ProbeLoreVersion(Candidate, Version))
+		{
+			return false;
+		}
+
+		OutUsedCommand = Candidate;
+		return true;
 	}
 
 	// Resolves a bare command name (e.g. "lore.exe") to the full path of the first match on PATH.
@@ -187,18 +242,26 @@ namespace FLoreSourceControlUtils
 
 		// Default official / common install locations (platform specific)
 		TArray<FString> DefaultInstallPaths = GetDefaultLoreInstallSearchPaths();
+		FString FirstExistingInstallPath;
 		for (const FString& InstallPath : DefaultInstallPaths)
 		{
 			if (FPaths::FileExists(InstallPath))
 			{
+				if (FirstExistingInstallPath.IsEmpty())
+				{
+					FirstExistingInstallPath = InstallPath;
+				}
+
 				FString Validated;
 				if (TryExecuteLoreVersion(InstallPath, Validated))
 				{
 					return Validated;
 				}
-				// File exists but didn't respond — still return it so availability can report the issue
-				return InstallPath;
 			}
+		}
+		if (!FirstExistingInstallPath.IsEmpty())
+		{
+			return FirstExistingInstallPath;
 		}
 
 		// 4. Last resort: bare name (will likely fail availability check, which will instruct the user)
@@ -250,20 +313,15 @@ namespace FLoreSourceControlUtils
 		return true;
 	}
 
-	bool CheckLoreAvailability(const FString& InLoreBinaryPath)
+	bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion, bool* OutTestedVersion)
 	{
-		if (InLoreBinaryPath.IsEmpty())
+		FString Version;
+		const bool bAvailable = ProbeLoreVersion(InLoreBinaryPath, Version, OutTestedVersion);
+		if (OutVersion)
 		{
-			return false;
+			*OutVersion = MoveTemp(Version);
 		}
-
-		int32 ReturnCode = 0;
-		FString OutResults;
-		FString OutErrors;
-
-		FPlatformProcess::ExecProcess(*InLoreBinaryPath, TEXT("--version"), &ReturnCode, &OutResults, &OutErrors);
-
-		return ReturnCode == 0;
+		return bAvailable;
 	}
 
 	bool FindRootDirectory(const FString& InPath, FString& OutRepositoryRoot)

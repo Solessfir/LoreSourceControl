@@ -182,6 +182,9 @@ private:
 	/** Path to lore.exe */
 	FString LoreBinaryPath;
 
+	/** Version reported by the selected Lore binary. */
+	FString LoreVersion;
+
 	/** Root of current lore repo */
 	FString PathToRepositoryRoot;
 
