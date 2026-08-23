@@ -21,6 +21,37 @@ namespace FLoreSourceControlUtils
 {
 	static FString ExtractBranchFromStatusOutput(const FString& InResults);
 
+	FString QuoteCommandLineArgument(const FString& InArgument)
+	{
+		FString Escaped;
+		Escaped.Reserve(InArgument.Len() + 2);
+
+		int32 PendingBackslashes = 0;
+		for (const TCHAR Char : InArgument)
+		{
+			if (Char == TEXT('\\'))
+			{
+				++PendingBackslashes;
+				continue;
+			}
+
+			if (Char == TEXT('"'))
+			{
+				Escaped.Append(FString::ChrN(PendingBackslashes * 2 + 1, TEXT('\\')));
+				Escaped.AppendChar(TEXT('"'));
+			}
+			else
+			{
+				Escaped.Append(FString::ChrN(PendingBackslashes, TEXT('\\')));
+				Escaped.AppendChar(Char);
+			}
+			PendingBackslashes = 0;
+		}
+
+		Escaped.Append(FString::ChrN(PendingBackslashes * 2, TEXT('\\')));
+		return FString::Printf(TEXT("\"%s\""), *Escaped);
+	}
+
 	static bool ParseJsonLine(const FString& InLine, TSharedPtr<FJsonObject>& OutObject)
 	{
 		const TSharedRef<TJsonReader<>>& Reader = TJsonReaderFactory<>::Create(InLine);
@@ -805,7 +836,8 @@ namespace FLoreSourceControlUtils
 	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages, TArray<FString>* OutChangedPaths)
 	{
 		TArray<FString> Params;
-		Params.Add(InBranchName);
+		Params.Add(TEXT("--"));
+		Params.Add(QuoteCommandLineArgument(InBranchName));
 
 		TArray<FString> Results;
 		const bool bOk = RunLoreCommand(TEXT("branch switch"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, OutErrorMessages);
@@ -839,7 +871,8 @@ namespace FLoreSourceControlUtils
 	bool RunGetBranchDiff(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InTargetBranch, TArray<FString>& OutChangedPaths, TArray<FString>& OutErrorMessages)
 	{
 		TArray<FString> Params;
-		Params.Add(InTargetBranch);
+		Params.Add(TEXT("--"));
+		Params.Add(QuoteCommandLineArgument(InTargetBranch));
 
 		TArray<FString> Results;
 		const bool bOk = RunLoreCommand(TEXT("branch diff"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, OutErrorMessages);
@@ -950,8 +983,7 @@ namespace FLoreSourceControlUtils
 		TArray<FString> Params;
 		if (!CurrentBranch.IsEmpty())
 		{
-			Params.Add(TEXT("--branch"));
-			Params.Add(CurrentBranch);
+			Params.Add(FString::Printf(TEXT("--branch=%s"), *QuoteCommandLineArgument(CurrentBranch)));
 		}
 
 		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);

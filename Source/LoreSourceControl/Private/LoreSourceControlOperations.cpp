@@ -14,40 +14,6 @@
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
 
-// Quote a free-form string (e.g. a commit message) as a single command-line argument.
-// Escaping only the quotes is not enough.
-// Backslashes that precede a quote or the end of the argument must be doubled; otherwise, a message ending in '\' swallows the closing quote and corrupts the whole command line.
-static FString QuoteCommandLineArgument(const FString& InArg)
-{
-	FString Escaped;
-	Escaped.Reserve(InArg.Len() + 2);
-
-	int32 PendingBackslashes = 0;
-	for (const TCHAR Char : InArg)
-	{
-		if (Char == TEXT('\\'))
-		{
-			++PendingBackslashes;
-			continue;
-		}
-
-		if (Char == TEXT('"'))
-		{
-			Escaped.Append(FString::ChrN(PendingBackslashes * 2 + 1, TEXT('\\')));
-			Escaped.AppendChar(TEXT('"'));
-		}
-		else
-		{
-			Escaped.Append(FString::ChrN(PendingBackslashes, TEXT('\\')));
-			Escaped.AppendChar(Char);
-		}
-		PendingBackslashes = 0;
-	}
-
-	Escaped.Append(FString::ChrN(PendingBackslashes * 2, TEXT('\\')));
-	return FString::Printf(TEXT("\"%s\""), *Escaped);
-}
-
 static FString NormalizeComparisonPath(const FString& InPath)
 {
 	FString Result = FPaths::ConvertRelativePathToFull(InPath);
@@ -223,7 +189,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// Now commit
 	TArray<FString> CommitParams;
-	CommitParams.Add(QuoteCommandLineArgument(CommitMessage));
+	CommitParams.Add(FLoreSourceControlUtils::QuoteCommandLineArgument(CommitMessage));
 
 	TArray<FString> CommitResults;
 	TArray<FString> CommitErrors;

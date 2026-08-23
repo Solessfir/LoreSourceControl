@@ -42,6 +42,9 @@ struct FLoreLockOwner
 
 namespace FLoreSourceControlUtils
 {
+	/** Quote one command-line argument without changing its value. */
+	FString QuoteCommandLineArgument(const FString& InArgument);
+
 	/**
 	 * Returns the effective path (or command name) to use for the lore executable.
 	 *
