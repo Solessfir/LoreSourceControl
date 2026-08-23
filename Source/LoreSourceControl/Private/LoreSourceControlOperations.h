@@ -66,7 +66,7 @@ public:
 };
 
 /** CheckIn / Commit */
-class FLoreCheckInWorker : public ILoreSourceControlWorker
+class LORESOURCECONTROL_API FLoreCheckInWorker : public ILoreSourceControlWorker
 {
 public:
 	virtual FName GetName() const override { return "CheckIn"; }

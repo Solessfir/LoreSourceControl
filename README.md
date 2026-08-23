@@ -69,7 +69,7 @@ Lore does not use a separate `init` command. The offline form above creates the 
 
 ## Automated Tests
 
-Parser and behavior tests live in the separate `LoreSourceControlTests` editor module. Run the `LoreSourceControl` test group from Unreal's Session Frontend Automation tab or from the command line:
+Parser tests, Submit worker tests, and a temporary-repository Lore CLI test live in the separate `LoreSourceControlTests` editor module. The integration test uses the configured Lore binary and removes its isolated repository after each run. Run the `LoreSourceControl` test group from Unreal's Session Frontend Automation tab or from the command line:
 
 ```text
 UnrealEditor-Cmd.exe YourProject.uproject -unattended -nullrhi -ExecCmds="Automation RunTests LoreSourceControl; Quit" -TestExit="Automation Test Queue Empty"

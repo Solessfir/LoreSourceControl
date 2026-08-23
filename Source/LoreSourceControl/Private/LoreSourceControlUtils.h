@@ -54,7 +54,7 @@ namespace FLoreSourceControlUtils
 	 *   3. Default install location: C:/Program Files/lore/lore.exe (and variants)
 	 *   4. Bare "lore.exe" as last resort
 	 */
-	FString FindLoreBinaryPath();
+	LORESOURCECONTROL_API FString FindLoreBinaryPath();
 
 	/**
 	 * Read the top-level "remote_url" and "identity" scalars out of ".lore/config.toml".
@@ -64,7 +64,7 @@ namespace FLoreSourceControlUtils
 	bool ReadRepositoryConfig(const FString& InRepositoryRoot, FString& OutRemoteUrl, FString& OutIdentity);
 
 	/** Run "lore --version", parse the reported version, and indicate whether it is in the tested range. */
-	bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion = nullptr, bool* OutTestedVersion = nullptr);
+	LORESOURCECONTROL_API bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion = nullptr, bool* OutTestedVersion = nullptr);
 
 	/**
 	 * Find the lore repository root by walking up looking for a ".lore" directory.
@@ -78,7 +78,7 @@ namespace FLoreSourceControlUtils
 	 * OutResults - pass false only to get lore's own human-readable text (e.g. for printing status
 	 * straight to the log), never for a result this module intends to parse itself.
 	 */
-	bool RunLoreCommand(const FString& InCommand, const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages, bool bUseJson = true);
+	LORESOURCECONTROL_API bool RunLoreCommand(const FString& InCommand, const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages, bool bUseJson = true);
 
 	/**
 	 * Run "lore status" (with --scan recommended for accuracy) and parse results into states.
@@ -157,7 +157,7 @@ namespace FLoreSourceControlUtils
 	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
 
 	/** Return every staged file and directory in the repository as normalized absolute paths. */
-	bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages);
+	LORESOURCECONTROL_API bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages);
 
 	/**
 	 * Settings using UDeveloperSettings (Project Settings > Plugins > Lore Source Control).

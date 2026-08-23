@@ -280,7 +280,8 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 	Command->Files = AbsoluteFiles;
 	Command->PathToLoreBinary = GetLoreBinaryPath();
 	Command->PathToRepositoryRoot = RepositoryRoot;
-	Command->bShouldLockFiles = FLoreSourceControlUtils::ShouldLockFiles() && !GetRemoteUrl().IsEmpty();
+	Command->bHasRemote = !GetRemoteUrl().IsEmpty();
+	Command->bShouldLockFiles = FLoreSourceControlUtils::ShouldLockFiles() && Command->bHasRemote;
 	Command->OperationCompleteDelegate = InOperationCompleteDelegate;
 
 	if (InConcurrency == EConcurrency::Synchronous)

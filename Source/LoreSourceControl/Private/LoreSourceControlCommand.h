@@ -9,15 +9,20 @@
 #include "Misc/IQueuedWork.h"
 
 class FLoreSourceControlProvider;
+class FLoreSourceControlState;
 
 /**
  * A single Lore operation in flight. Implements IQueuedWork so it can be run on the engine's
  * thread pool (see FLoreSourceControlProvider::IssueCommand) - the actual lore invocation
  * never runs on the game thread, so a slow or unresponsive binary cannot freeze the editor.
  */
-class FLoreSourceControlCommand : public IQueuedWork
+class LORESOURCECONTROL_API FLoreSourceControlCommand : public IQueuedWork
 {
 public:
+	using FRunLoreCommand = TFunction<bool(const FString&, const TArray<FString>&, const TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
+	using FReadStagedPaths = TFunction<bool(TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
+	using FRefreshStatus = TFunction<bool(const TArray<FString>&, bool, TArray<FString>&, TArray<FLoreSourceControlState>&)>;
+
 	FLoreSourceControlCommand(const FSourceControlOperationRef& InOperation, const FLoreSourceControlWorkerRef& InWorker)
 		: Operation(InOperation)
 		, Worker(InWorker)
@@ -36,6 +41,11 @@ public:
 
 	/** Save any accumulated messages and fire the completion delegate. Called on the game thread. */
 	ECommandResult::Type ReturnResults();
+
+	/** Execute through the real Lore utility unless a worker test supplied a deterministic replacement. */
+	bool RunLoreCommand(const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages) const;
+	bool ReadStagedPaths(TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages) const;
+	bool RefreshStatus(const TArray<FString>& InFiles, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates) const;
 
 	/**
 	 * Provider that issued this command, captured on the game thread at Execute() time. Workers
@@ -76,6 +86,14 @@ public:
 
 	/** Settings snapshot captured on the game thread; UObject settings must not be read by workers. */
 	bool bShouldLockFiles = true;
+
+	/** Repository capability snapshot captured with the rest of the command inputs. */
+	bool bHasRemote = false;
+
+	/** Narrow command boundaries used by worker-level tests. Production commands leave these unbound. */
+	FRunLoreCommand RunLoreCommandOverride;
+	FReadStagedPaths ReadStagedPathsOverride;
+	FRefreshStatus RefreshStatusOverride;
 
 	/** True once the provider has submitted this FIFO entry to the engine thread pool. */
 	bool bDispatched = false;

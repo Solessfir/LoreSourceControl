@@ -130,13 +130,13 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	TArray<FString> StageErrors;
 	TArray<FString> StageResults;
-	bool bStaged = FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StageParams, InCommand.Files, StageResults, StageErrors);
+	bool bStaged = InCommand.RunLoreCommand(TEXT("stage"), StageParams, InCommand.Files, StageResults, StageErrors);
 	if (!bStaged)
 	{
 		// Try without --scan as fallback
 		TArray<FString> FallbackResults;
 		TArray<FString> FallbackErrors;
-		bStaged = FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, FallbackResults, FallbackErrors);
+		bStaged = InCommand.RunLoreCommand(TEXT("stage"), TArray<FString>(), InCommand.Files, FallbackResults, FallbackErrors);
 		StageResults.Append(FallbackResults);
 		StageErrors.Append(FallbackErrors);
 	}
@@ -152,7 +152,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// Verify the stage contains no unrelated path before invoking it, preserving the user's existing stage instead of silently committing extra work.
 	TArray<FString> StagedFiles;
 	TArray<FString> StagedDirectories;
-	if (!FLoreSourceControlUtils::RunGetStagedPaths(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StagedFiles, StagedDirectories, InCommand.ErrorMessages))
+	if (!InCommand.ReadStagedPaths(StagedFiles, StagedDirectories, InCommand.ErrorMessages))
 	{
 		InCommand.ErrorMessages.Add(TEXT("Submit aborted because the staged path set could not be verified."));
 		return false;
@@ -205,26 +205,28 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	TArray<FString> CommitResults;
 	TArray<FString> CommitErrors;
-	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunLoreCommand(TEXT("commit"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, CommitParams, TArray<FString>(), CommitResults, CommitErrors);
+	InCommand.bCommandSuccessful = InCommand.RunLoreCommand(TEXT("commit"), CommitParams, TArray<FString>(), CommitResults, CommitErrors);
 
 	InCommand.InfoMessages.Append(CommitResults);
 	InCommand.ErrorMessages.Append(CommitErrors);
 
 	// Push after committing when the repository has a remote. Offline repositories use the same Submit flow but keep the commit local.
-	const bool bHasRemote = !InCommand.Provider->GetRemoteUrl().IsEmpty();
 	bool bPushed = false;
-	if (InCommand.bCommandSuccessful && bHasRemote)
+	if (InCommand.bCommandSuccessful && InCommand.bHasRemote)
 	{
 		TArray<FString> PushResults;
 		TArray<FString> PushErrors;
-		bPushed = FLoreSourceControlUtils::RunLoreCommand(TEXT("branch push"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), TArray<FString>(), PushResults, PushErrors);
+		bPushed = InCommand.RunLoreCommand(TEXT("branch push"), TArray<FString>(), TArray<FString>(), PushResults, PushErrors);
 
 		InCommand.InfoMessages.Append(PushResults);
 		if (!bPushed)
 		{
 			InCommand.ErrorMessages.Append(PushErrors);
 			InCommand.ErrorMessages.Add(TEXT("Commit succeeded locally, but push to remote failed. Run 'lore branch push' manually to publish it."));
-			InCommand.Provider->SetHasChangesToPush(true);
+			if (InCommand.Provider)
+			{
+				InCommand.Provider->SetHasChangesToPush(true);
+			}
 			InCommand.bCommandSuccessful = false;
 		}
 	}
@@ -235,17 +237,20 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// The change is now committed, so there is nothing left to protect by holding the lock - release it, same as Revert.
 	// Best-effort: a file that was never locked has nothing to release.
-	if (InCommand.bCommandSuccessful && bHasRemote && bPushed && InCommand.bShouldLockFiles)
+	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
-		FLoreSourceControlUtils::RunLoreCommand(TEXT("lock release"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
+		InCommand.RunLoreCommand(TEXT("lock release"), TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
 	}
 
 	// Refresh states for the files
 	StateScanPaths = InCommand.Files;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, bHasRemote && InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	bApplyStateResults = InCommand.RefreshStatus(InCommand.Files, InCommand.bHasRemote && InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
-	InCommand.Provider->UpdateCurrentBranchName();
+	if (InCommand.Provider)
+	{
+		InCommand.Provider->UpdateCurrentBranchName();
+	}
 
 	// After successful commit, suggest asset reload to user / do it for content files
 	if (InCommand.bCommandSuccessful)
@@ -257,7 +262,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		// The engine's Submit dialog reads this for its success toast through Operation->GetSuccessMessage().
 		// Git, Perforce, and Plastic set it the same way; without it, the notification title is blank.
 		Operation->SetSuccessMessage(FText::Format(
-			bHasRemote ? LOCTEXT("CheckInSuccess", "Submitted revision \"{0}\".") : LOCTEXT("LocalCheckInSuccess", "Committed revision \"{0}\" locally."),
+			InCommand.bHasRemote ? LOCTEXT("CheckInSuccess", "Submitted revision \"{0}\".") : LOCTEXT("LocalCheckInSuccess", "Committed revision \"{0}\" locally."),
 			FText::FromString(CommitMessage)));
 	}
 
