@@ -754,28 +754,45 @@ void FLoreSourceControlProvider::AddStatesToCache(const TArray<FLoreSourceContro
 
 void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths)
 {
-	FScopeLock Lock(&CriticalSection);
+	TSet<FString> ExactPaths;
+	TArray<FString> DirectoryPrefixes;
 
 	for (const FString& ScanPath : InScanPaths)
 	{
 		FString NormalizedPath = FPaths::ConvertRelativePathToFull(ScanPath);
 		FPaths::NormalizeFilename(NormalizedPath);
 		NormalizedPath.ReplaceInline(TEXT("\\"), TEXT("/"));
-
 		const bool bDirectoryScope = FPaths::DirectoryExists(NormalizedPath);
-		FString DirectoryPrefix = NormalizedPath;
-		if (bDirectoryScope && !DirectoryPrefix.EndsWith(TEXT("/")))
-		{
-			DirectoryPrefix += TEXT("/");
-		}
+		NormalizedPath.ToLowerInline();
+		ExactPaths.Add(NormalizedPath);
 
+		if (bDirectoryScope)
+		{
+			DirectoryPrefixes.AddUnique(NormalizedPath.EndsWith(TEXT("/")) ? NormalizedPath : NormalizedPath + TEXT("/"));
+		}
+	}
+
+	FScopeLock Lock(&CriticalSection);
+	if (!ExactPaths.IsEmpty())
+	{
 		for (auto It = StateCache.CreateIterator(); It; ++It)
 		{
-			const bool bExactMatch = It.Key().Equals(NormalizedPath, ESearchCase::IgnoreCase);
-			const bool bWithinDirectory = bDirectoryScope && It.Key().StartsWith(DirectoryPrefix, ESearchCase::IgnoreCase);
-			if (bExactMatch || bWithinDirectory)
+			FString CachedPath = It.Key();
+			CachedPath.ToLowerInline();
+
+			if (ExactPaths.Contains(CachedPath))
 			{
 				It.RemoveCurrent();
+				continue;
+			}
+
+			for (const FString& DirectoryPrefix : DirectoryPrefixes)
+			{
+				if (CachedPath.StartsWith(DirectoryPrefix))
+				{
+					It.RemoveCurrent();
+					break;
+				}
 			}
 		}
 	}

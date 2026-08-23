@@ -9,6 +9,7 @@
 #include "Features/IModularFeatures.h"
 #include "ILoreSourceControlWorker.h"
 #include "ISourceControlModule.h"
+#include "SourceControlHelpers.h"
 #include "SourceControlOperations.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Paths.h"
@@ -297,9 +298,9 @@ void FLoreSourceControlModule::OnWindowBeingDestroyed(const SWindow& Window)
 		return;
 	}
 
-	// Same broad scope as the dialog's own opening scan (Content + Config + the .uproject).
+	// Refresh the same Content, Config, and project-file locations that Unreal scanned when the dialog opened.
 	const TSharedRef<FUpdateStatus> StatusOp = ISourceControlOperation::Create<FUpdateStatus>();
-	LoreSourceControlProvider.Execute(StatusOp, TArray<FString>{ FPaths::ProjectDir() }, EConcurrency::Asynchronous);
+	LoreSourceControlProvider.Execute(StatusOp, SourceControlHelpers::GetSourceControlLocations(), EConcurrency::Asynchronous);
 }
 
 void FLoreSourceControlModule::RefreshToolbarExtension() const
