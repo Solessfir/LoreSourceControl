@@ -27,9 +27,12 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/SBoxPanel.h"
+#include "Framework/Commands/Commands.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "RevisionControlStyle/RevisionControlStyle.h"
 #include "Styling/AppStyle.h"
+#include "Styling/SlateStyle.h"
+#include "Styling/SlateTypes.h"
 #include "Interfaces/IMainFrameModule.h"
 #include "Editor.h"
 #include "FileHelpers.h"
@@ -64,6 +67,22 @@ static void CompleteLoreProgressNotification(TWeakPtr<SNotificationItem>& Notifi
 	}
 	Notification.Reset();
 }
+
+class FLoreSourceControlCommands final : public TCommands<FLoreSourceControlCommands>
+{
+public:
+	FLoreSourceControlCommands()
+		: TCommands("LoreSourceControl", LOCTEXT("LoreSourceControlCommands", "Lore Source Control"), NAME_None, FAppStyle::GetAppStyleSetName())
+	{
+	}
+
+	virtual void RegisterCommands() override
+	{
+		UI_COMMAND(Sync, "Sync", "Pull latest from Lore", EUserInterfaceActionType::Check, FInputChord());
+	}
+
+	TSharedPtr<FUICommandInfo> Sync;
+};
 #endif
 
 // Local helper to create workers (avoids issues taking address of member templates)
@@ -152,6 +171,8 @@ void FLoreSourceControlModule::StartupModule()
 	// Skip all UI registration in that case because MainFrame, toolbar, and window delegates require a live Slate app.
 	if (FSlateApplication::IsInitialized())
 	{
+		FLoreSourceControlCommands::Register();
+
 		// The engine's own Revision Control widget registers inside SStatusBar::Construct(), which only runs once the level editor's main tab is built - well after this module loads.
 		// Registering via UToolMenus::RegisterStartupCallback (module load time) would be too early for that widget to exist yet, so wait for the main frame instead.
 		IMainFrameModule& MainFrameModule = FModuleManager::LoadModuleChecked<IMainFrameModule>("MainFrame");
@@ -231,6 +252,11 @@ void FLoreSourceControlModule::ShutdownModule()
 	if (const UToolMenus* ToolMenus = UToolMenus::TryGet())
 	{
 		ToolMenus->UnregisterOwner(this);
+	}
+
+	if (FLoreSourceControlCommands::IsRegistered())
+	{
+		FLoreSourceControlCommands::Unregister();
 	}
 #endif
 
@@ -413,14 +439,22 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 		LoreSourceControlProvider.RefreshBranchesAsync();
 	}
 
-	FMenuBuilder MenuBuilder(true, nullptr);
+	if (!BranchMenuStyle)
+	{
+		BranchMenuStyle = MakeShared<FSlateStyleSet>("LoreSourceControl.BranchMenu");
+		BranchMenuStyle->SetParentStyleName(FAppStyle::GetAppStyleSetName());
+		const FSlateBrush& SyncBrush = *FRevisionControlStyleManager::Get().GetBrush("RevisionControl.Actions.Sync");
+		BranchMenuStyle->Set("LoreSourceControl.SyncAction", FCheckBoxStyle().SetUncheckedImage(SyncBrush).SetUncheckedHoveredImage(SyncBrush));
+	}
+
+	const TSharedRef<FUICommandList> BranchMenuCommandList = MakeShared<FUICommandList>();
+	BranchMenuCommandList->MapAction(FLoreSourceControlCommands::Get().Sync, FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OnSyncClicked), FCanExecuteAction::CreateLambda([this]() { return !IsToolbarOperationInProgress(); }));
+	FMenuBuilder MenuBuilder(true, BranchMenuCommandList, TSharedPtr<FExtender>(), false, BranchMenuStyle.Get());
 
 	MenuBuilder.BeginSection("LoreActions", LOCTEXT("BranchSwitcherMenuActions", "Actions"));
-	MenuBuilder.AddMenuEntry(
-		LOCTEXT("SyncAction", "Sync"),
-		LOCTEXT("SyncAction_Tooltip", "Pull latest from Lore"),
-		FSlateIcon(FRevisionControlStyleManager::Get().GetStyleSetName(), "RevisionControl.Actions.Sync"),
-		FUIAction(FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OnSyncClicked), FCanExecuteAction::CreateLambda([this]() { return !IsToolbarOperationInProgress(); })));
+	MenuBuilder.SetCheckBoxStyle("LoreSourceControl.SyncAction");
+	MenuBuilder.AddMenuEntry(FLoreSourceControlCommands::Get().Sync);
+	MenuBuilder.SetCheckBoxStyle(NAME_None);
 	if (BranchState == ELoreBranchCacheState::Failed)
 	{
 		MenuBuilder.AddMenuEntry(

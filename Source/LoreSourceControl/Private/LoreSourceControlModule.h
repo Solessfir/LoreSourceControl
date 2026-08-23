@@ -8,6 +8,7 @@
 
 class SWindow;
 class SNotificationItem;
+class FSlateStyleSet;
 struct IConsoleCommand;
 
 class FLoreSourceControlModule : public IModuleInterface
@@ -74,6 +75,7 @@ private:
 	bool bBranchSwitchInProgress = false;
 	TWeakPtr<SNotificationItem> SyncNotification;
 	TWeakPtr<SNotificationItem> BranchSwitchNotification;
+	TSharedPtr<FSlateStyleSet> BranchMenuStyle;
 #endif
 
 	IConsoleCommand* LoreSyncCommand = nullptr;
