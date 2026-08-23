@@ -1052,6 +1052,11 @@ namespace FLoreSourceControlUtils
 		}
 
 		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);
+		if (bOk)
+		{
+			// Lore resolves lock owner display names as an optional follow-up. Local servers without an auth endpoint still return valid lock data.
+			Errors.RemoveAll([](const FString& Error) { return Error.Contains(TEXT("authentication requires a configured auth endpoint")); });
+		}
 		if (OutErrorMessages)
 		{
 			OutErrorMessages->Append(Errors);
