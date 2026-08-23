@@ -68,6 +68,15 @@ void FLoreSourceControlProvider::Close()
 FText FLoreSourceControlProvider::GetStatusText() const
 {
 	FScopeLock ScopeLock(&CriticalSection);
+	if (!bLoreAvailable)
+	{
+		return LOCTEXT("LoreStatusNotAvailable", "Lore is not available.\n\nTo configure: Project Settings > Editor > Lore Source Control (set 'Lore Path' or leave empty for auto-detect).");
+	}
+
+	if (!bLoreRepositoryFound)
+	{
+		return LOCTEXT("LoreStatusRepositoryNotFound", "Lore is installed, but this project is not inside a Lore repository.\n\nA .lore directory must exist in the project directory or one of its parents.");
+	}
 
 	FFormatNamedArguments Args;
 	Args.Add(TEXT("Root"), FText::FromString(PathToRepositoryRoot));
@@ -79,14 +88,6 @@ FText FLoreSourceControlProvider::GetStatusText() const
 	if (bHasChangesToPush)
 	{
 		Base = FText::Format(LOCTEXT("LoreStatusLocalAhead", "{0}\nOutgoing commits: yes (publish required)"), Base);
-	}
-
-	if (!bLoreAvailable)
-	{
-		Base = FText::Format(LOCTEXT("LoreStatusNotAvailable",
-			"{0}\n\n"
-			"To configure: Project Settings > Editor > Lore Source Control (set 'Lore Path' or leave empty for auto-detect)."),
-			Base);
 	}
 
 	return Base;
@@ -392,7 +393,23 @@ ECommandResult::Type FLoreSourceControlProvider::Login(const FString& InPassword
 		return ECommandResult::Failed;
 	}
 
-	// If we have a valid path, consider login successful for settings acceptance (actual repo connect happens separately)
+	CheckRepositoryStatus();
+	if (!IsLoreRepositoryFound())
+	{
+		const FText Error = LOCTEXT("LoginFailedNoRepository", "Cannot accept settings: this project is not inside a Lore repository. Make sure a .lore directory exists in the project directory or one of its parents.");
+		FMessageLog SourceControlLog("SourceControl");
+		SourceControlLog.Error(Error);
+		SourceControlLog.Notify(Error, EMessageSeverity::Error, /*bForce=*/true);
+
+		if (InOperationCompleteDelegate.IsBound())
+		{
+			const TSharedRef<FConnect> DummyOp = ISourceControlOperation::Create<FConnect>();
+			DummyOp->AddErrorMessge(Error);
+			InOperationCompleteDelegate.Execute(DummyOp, ECommandResult::Failed);
+		}
+		return ECommandResult::Failed;
+	}
+
 	if (InOperationCompleteDelegate.IsBound())
 	{
 		const TSharedRef<FConnect> Op = ISourceControlOperation::Create<FConnect>();
@@ -529,6 +546,12 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 	{
 		FMessageLog("SourceControl").Warning(FText::Format(LOCTEXT("LoreVersionUntested", "Lore {0} has not been tested with this plugin. Continuing because the Lore CLI is available."), FText::FromString(NewLoreVersion)));
 	}
+}
+
+bool FLoreSourceControlProvider::IsLoreRepositoryFound() const
+{
+	FScopeLock Lock(&CriticalSection);
+	return bLoreRepositoryFound;
 }
 
 void FLoreSourceControlProvider::CheckRepositoryStatus()

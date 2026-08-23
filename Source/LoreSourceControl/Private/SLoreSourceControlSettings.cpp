@@ -155,6 +155,7 @@ void SLoreSourceControlSettings::OnBinaryPathPicked(const FString& PickedPath) c
 	// Notify the provider so it can re-check availability
 	Provider->SetLoreBinaryPath(PickedPath);
 	Provider->CheckLoreAvailability();
+	Provider->CheckRepositoryStatus();
 }
 
 bool SLoreSourceControlSettings::IsLoreBinaryValid() const
@@ -162,13 +163,23 @@ bool SLoreSourceControlSettings::IsLoreBinaryValid() const
 	return Provider->IsLoreBinaryAvailable();
 }
 
+bool SLoreSourceControlSettings::IsLoreRepositoryValid() const
+{
+	return Provider->IsLoreRepositoryFound();
+}
+
 EVisibility SLoreSourceControlSettings::GetWarningVisibility() const
 {
-	return IsLoreBinaryValid() ? EVisibility::Collapsed : EVisibility::Visible;
+	return IsLoreBinaryValid() && IsLoreRepositoryValid() ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
 FText SLoreSourceControlSettings::GetWarningText() const
 {
+	if (IsLoreBinaryValid())
+	{
+		return LOCTEXT("LoreRepositoryNotFoundWarning", "Lore is installed, but this project is not inside a Lore repository. A .lore directory must exist in the project directory or one of its parents.");
+	}
+
 	FString Path = Provider->GetLoreBinaryPath();
 	if (Path.IsEmpty())
 	{

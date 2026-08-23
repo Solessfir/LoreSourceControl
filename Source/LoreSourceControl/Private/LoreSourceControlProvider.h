@@ -64,6 +64,7 @@ public:
 
 	/** Check if lore is available */
 	void CheckLoreAvailability();
+	bool IsLoreRepositoryFound() const;
 
 	/** Check if current workspace is a lore repository */
 	void CheckRepositoryStatus();
