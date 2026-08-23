@@ -264,9 +264,9 @@ void FLoreSourceControlModule::OnWindowBeingDestroyed(const SWindow& Window)
 		return;
 	}
 
-	// Matches the default title set in SourceControlWindows.cpp "SourceControl.ConfirmSubmit"
-	static const FString SubmitDialogTitle = TEXT("Confirm Submit");
-	if (Window.GetTitle().ToString() != SubmitDialogTitle)
+	// Matches the localized default title set in SourceControlWindows.cpp.
+	static const FText SubmitDialogTitle = NSLOCTEXT("SourceControl.ConfirmSubmit", "Title", "Confirm Submit");
+	if (!Window.GetTitle().EqualTo(SubmitDialogTitle))
 	{
 		return;
 	}

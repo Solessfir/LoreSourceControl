@@ -239,19 +239,19 @@ EVisibility SLoreSourceControlSettings::GetConnectionInfoVisibility() const
 FText SLoreSourceControlSettings::GetServerText() const
 {
 	const FString Server = Provider->GetRemoteUrl();
-	return FText::FromString(Server.IsEmpty() ? TEXT("(offline, no remote configured)") : Server);
+	return Server.IsEmpty() ? LOCTEXT("NoRemoteConfigured", "(offline, no remote configured)") : FText::FromString(Server);
 }
 
 FText SLoreSourceControlSettings::GetUserText() const
 {
 	const FString User = Provider->GetIdentity();
-	return FText::FromString(User.IsEmpty() ? TEXT("(not configured)") : User);
+	return User.IsEmpty() ? LOCTEXT("NoUserConfigured", "(not configured)") : FText::FromString(User);
 }
 
 FText SLoreSourceControlSettings::GetBranchText() const
 {
 	const FString Branch = Provider->GetBranchName();
-	return FText::FromString(Branch.IsEmpty() ? TEXT("(unknown)") : Branch);
+	return Branch.IsEmpty() ? LOCTEXT("UnknownBranch", "(unknown)") : FText::FromString(Branch);
 }
 
 #undef LOCTEXT_NAMESPACE

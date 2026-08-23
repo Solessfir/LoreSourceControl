@@ -3,6 +3,8 @@
 #include "LoreSourceControlState.h"
 #include "RevisionControlStyle/RevisionControlStyle.h"
 
+#define LOCTEXT_NAMESPACE "LoreSourceControl"
+
 TSharedPtr<ISourceControlRevision> FLoreSourceControlState::GetHistoryItem(int32 HistoryIndex) const
 {
 	if (History.IsValidIndex(HistoryIndex))
@@ -97,97 +99,99 @@ FText FLoreSourceControlState::GetDisplayName() const
 {
 	if (IsConflicted())
 	{
-		return FText::FromString(TEXT("Conflicted"));
+		return LOCTEXT("StateConflicted", "Conflicted");
 	}
 
 	if (bIsCheckedOutOther)
 	{
-		return FText::FromString(TEXT("Checked Out by Other User"));
+		return LOCTEXT("StateCheckedOutByOther", "Checked Out by Other User");
 	}
 
 	if (IsCheckedOut())
 	{
-		return FText::FromString(TEXT("Checked Out"));
+		return LOCTEXT("StateCheckedOut", "Checked Out");
 	}
 
 	if (IsAdded())
 	{
-		return FText::FromString(TEXT("Added"));
+		return LOCTEXT("StateAdded", "Added");
 	}
 
 	if (IsDeleted())
 	{
-		return FText::FromString(TEXT("Deleted"));
+		return LOCTEXT("StateDeleted", "Deleted");
 	}
 
 	if (IsModified())
 	{
-		return FText::FromString(TEXT("Modified"));
+		return LOCTEXT("StateModified", "Modified");
 	}
 
 	if (IsIgnored())
 	{
-		return FText::FromString(TEXT("Ignored"));
+		return LOCTEXT("StateIgnored", "Ignored");
 	}
 
 	if (!IsCurrent())
 	{
-		return FText::FromString(TEXT("Not at head"));
+		return LOCTEXT("StateNotAtHead", "Not at head");
 	}
 
 	if (IsSourceControlled())
 	{
-		return FText::FromString(TEXT("Under Lore"));
+		return LOCTEXT("StateUnderLore", "Under Lore");
 	}
 
-	return FText::FromString(TEXT("Not Under Lore"));
+	return LOCTEXT("StateNotUnderLore", "Not Under Lore");
 }
 
 FText FLoreSourceControlState::GetDisplayTooltip() const
 {
-	FString Tooltip;
+	FText Tooltip;
 
 	if (IsConflicted())
 	{
-		Tooltip = TEXT("Has conflicts that need to be resolved");
+		Tooltip = LOCTEXT("StateConflictedTooltip", "Has conflicts that need to be resolved");
 	}
 	else if (bIsCheckedOutOther)
 	{
-		Tooltip = FString::Printf(TEXT("Checked out by %s"), *CheckedOutOther);
+		Tooltip = FText::Format(LOCTEXT("StateCheckedOutByOtherTooltip", "Checked out by {0}"), FText::FromString(CheckedOutOther));
 	}
 	else if (IsCheckedOut())
 	{
-		Tooltip = TEXT("Checked out by you");
+		Tooltip = LOCTEXT("StateCheckedOutTooltip", "Checked out by you");
 	}
 	else if (IsAdded())
 	{
-		Tooltip = TEXT("Added, pending commit");
+		Tooltip = LOCTEXT("StateAddedTooltip", "Added, pending commit");
 	}
 	else if (IsDeleted())
 	{
-		Tooltip = TEXT("Deleted, pending commit");
+		Tooltip = LOCTEXT("StateDeletedTooltip", "Deleted, pending commit");
 	}
 	else if (IsModified())
 	{
-		Tooltip = TEXT("Modified locally");
+		Tooltip = LOCTEXT("StateModifiedTooltip", "Modified locally");
 	}
 	else if (IsIgnored())
 	{
-		Tooltip = TEXT("Ignored by Lore");
+		Tooltip = LOCTEXT("StateIgnoredTooltip", "Ignored by Lore");
 	}
 	else if (IsSourceControlled())
 	{
-		Tooltip = TEXT("Tracked by Lore");
+		Tooltip = LOCTEXT("StateUnderLoreTooltip", "Tracked by Lore");
 	}
 	else
 	{
-		Tooltip = TEXT("Not tracked by Lore");
+		Tooltip = LOCTEXT("StateNotUnderLoreTooltip", "Not tracked by Lore");
 	}
 
 	if (!BranchName.IsEmpty())
 	{
-		Tooltip += FString::Printf(TEXT(" (%s)"), *BranchName);
+		Tooltip = FText::Format(LOCTEXT("StateTooltipWithBranch", "{0} ({1})"), Tooltip, FText::FromString(BranchName));
 	}
 
-	return FText::FromString(Tooltip);
+	return Tooltip;
 }
+
+#undef LOCTEXT_NAMESPACE
