@@ -24,8 +24,7 @@ bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type 
 		return true;
 	}
 
-	// Relativize Filename to the repository root the same way RunLoreCommand does for its own
-	// file arguments, since --path here needs a lore-relative path, not an absolute one.
+	// Relativize Filename to the repository root the same way RunLoreCommand does for its own file arguments, since --path here needs a lore-relative path, not an absolute one.
 	FString RelativeToForMake = PathToRepositoryRoot;
 	FPaths::NormalizeFilename(RelativeToForMake);
 	if (!RelativeToForMake.EndsWith(TEXT("/")))
@@ -33,9 +32,8 @@ bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type 
 		RelativeToForMake += TEXT("/");
 	}
 
-	// MakePathRelativeTo treats its second argument as a file and relativizes against its
-	// containing directory (stripping the last path segment) - appending a fake leaf here makes
-	// it strip "dummy" instead, leaving PathToRepositoryRoot itself as the base directory.
+	// MakePathRelativeTo treats its second argument as a file and relativizes against its containing directory by stripping the last path segment.
+	// Appending a fake leaf makes it strip "dummy" instead, leaving PathToRepositoryRoot as the base directory.
 	RelativeToForMake += TEXT("dummy");
 
 	FString RelativePath = Filename;

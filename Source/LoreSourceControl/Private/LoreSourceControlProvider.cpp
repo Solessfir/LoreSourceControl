@@ -23,21 +23,18 @@
 
 void FLoreSourceControlProvider::Init(bool bForceConnection)
 {
-	// Init() can be called more than once (e.g. re-registering the modular feature); avoid
-	// re-running the external "lore --version" probe every time.
+	// Init() can be called more than once (e.g. re-registering the modular feature); avoid re-running the external "lore --version" probe every time.
 	if (!bLoreAvailable)
 	{
 		CheckLoreAvailability();
 	}
 
-	// Filesystem-only repository discovery (looks for a ".lore" directory) - never spawns a
-	// process, so this is always safe to run synchronously here.
+	// Filesystem-only repository discovery (looks for a ".lore" directory) - never spawns a process, so this is always safe to run synchronously here.
 	CheckRepositoryStatus();
 
-	// Branch name and dirty/behind-remote flags require invoking the lore binary, which can be
-	// slow or, if it ever stalls (e.g. waiting on its own server connection), hang outright.
-	// Fetch them asynchronously via the thread pool so editor startup is never gated on lore.exe
-	// (see FLoreConnectWorker). This is what previously caused the editor to hang on restart.
+	// Branch name and dirty/behind-remote flags require invoking the lore binary, which can be slow or, if it ever stalls (e.g. waiting on its own server connection), hang outright.
+	// Fetch them asynchronously via the thread pool so editor startup is never gated on lore.exe (see FLoreConnectWorker).
+	// This is what previously caused the editor to hang on restart.
 	if (bLoreAvailable && bLoreRepositoryFound)
 	{
 		Execute(ISourceControlOperation::Create<FConnect>(), TArray<FString>(), EConcurrency::Asynchronous);
@@ -46,9 +43,8 @@ void FLoreSourceControlProvider::Init(bool bForceConnection)
 
 void FLoreSourceControlProvider::Close()
 {
-	// Commands still in flight reference this provider, and Tick() will never see them again once
-	// the queue is emptied - retract the ones the pool hasn't started yet and wait out the rest,
-	// so none of them outlive us or leak.
+	// Commands still in flight reference this provider, and Tick() will never see them again after the queue is emptied.
+	// Retract commands that the pool has not started and wait for the rest so none of them outlive us or leak.
 	for (FLoreSourceControlCommand* Command : CommandQueue)
 	{
 		if (Command->bDispatched && (!GThreadPool || !GThreadPool->RetractQueuedWork(Command)))
@@ -139,9 +135,9 @@ ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>&
 
 	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate)
 	{
-		// Synchronous Execute() dispatches to the thread pool and blocks this (game) thread until the
-		// worker finishes - and that worker needs CriticalSection too (e.g. to read/set the branch
-		// name). Must not hold the lock across this call or the two threads deadlock on it.
+		// Synchronous Execute() dispatches to the thread pool and blocks this game thread until the worker finishes.
+		// That worker also needs CriticalSection, for example to read or set the branch name.
+		// Must not hold the lock across this call or the two threads deadlock on it.
 		TSharedRef<FUpdateStatus> UpdateStatusOperation = ISourceControlOperation::Create<FUpdateStatus>();
 		UpdateResult = Execute(UpdateStatusOperation, AbsoluteFiles);
 	}
@@ -156,8 +152,7 @@ ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>&
 		}
 		else
 		{
-			// Unknown file - default to source controlled if under our repo root so that
-			// UE asset discovery does not report thousands of "uncontrolled" assets for a lore workspace.
+			// Unknown file - default to source controlled if under our repo root so that UE asset discovery does not report thousands of "uncontrolled" assets for a lore workspace.
 			FLoreSourceControlState NewState(File);
 			if (bLoreRepositoryFound && !PathToRepositoryRoot.IsEmpty())
 			{
@@ -232,9 +227,9 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 
 	TArray<FString> AbsoluteFiles = SourceControlHelpers::AbsoluteFilenames(InFiles);
 
-	// A file outside our repository (e.g. Engine/Content) can't be queried by lore - it errors
-	// "invalid path" and fails the whole batch, which took down "Submit Content" and similar ops
-	// that gather every loaded package regardless of origin. Silently drop those instead.
+	// Lore cannot query a file outside our repository, such as Engine/Content, and fails the entire batch with "invalid path".
+	// This broke "Submit Content" and similar operations that gather every loaded package regardless of origin.
+	// Silently drop those instead.
 	const FString RepositoryRoot = GetRepositoryRoot();
 	if (!RepositoryRoot.IsEmpty())
 	{
@@ -253,9 +248,8 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 			return !NormFile.StartsWith(NormRoot);
 		});
 
-		// Every requested file was outside the repository. Running lore with an empty path list
-		// would make path-scoped commands (stage --scan, lock acquire, ...) act on the whole
-		// repository instead of on nothing - don't run anything.
+		// Every requested file was outside the repository.
+		// Running lore with an empty path list would make path-scoped commands (stage --scan, lock acquire, ...) act on the whole repository instead of on nothing - don't run anything.
 		if (AbsoluteFiles.IsEmpty() && InFiles.Num() > 0)
 		{
 			InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Cancelled);
@@ -312,9 +306,9 @@ void FLoreSourceControlProvider::CancelOperation(const FSourceControlOperationRe
 
 bool FLoreSourceControlProvider::UsesLocalReadOnlyState() const
 {
-	// Lore locks are advisory only (see FLoreSourceControlState::CanEdit) - acquiring one never
-	// touches local file permissions, so unlike Perforce the read-only bit isn't a meaningful signal
-	// here. Returning true would make the editor rely on a flag we never actually set.
+	// Lore locks are advisory only (see FLoreSourceControlState::CanEdit), so acquiring one never changes local file permissions.
+	// Unlike Perforce, the read-only bit is not a meaningful signal here.
+	// Returning true would make the editor rely on a flag we never actually set.
 	return false;
 }
 
@@ -330,16 +324,15 @@ bool FLoreSourceControlProvider::UsesUncontrolledChangelists() const
 
 bool FLoreSourceControlProvider::UsesCheckout() const
 {
-	// Also the master switch gating the per-asset "Check Out" button (e.g. FEditorFileUtils::
-	// IsCheckOutSelectedDisabled), so it must stay true - Check Out is actively used here. Tradeoff:
-	// the Perforce-style "Check Out Modified Files" bulk dialog also becomes available.
+	// Also the master switch gating the per-asset "Check Out" button (e.g. FEditorFileUtils::IsCheckOutSelectedDisabled), so it must stay true - Check Out is actively used here.
+	// Tradeoff: the Perforce-style "Check Out Modified Files" bulk dialog also becomes available.
 	return true;
 }
 
 bool FLoreSourceControlProvider::UsesFileRevisions() const
 {
-	// Matches Git's own plugin (also false) despite having full per-file history support - this
-	// flag isn't actually read anywhere in engine code, it exists purely for provider self-description.
+	// This matches Git's plugin, which also returns false despite having full per-file history support.
+	// Engine code does not read this flag; it exists only for provider self-description.
 	return false;
 }
 
@@ -355,9 +348,8 @@ bool FLoreSourceControlProvider::UsesSoftRevertOnDelete() const
 
 bool FLoreSourceControlProvider::AllowsDiffAgainstDepot() const
 {
-	// FLoreSourceControlRevision::Get() (used by the File History window) already fetches historical
-	// content via "lore file write --revision", so the editor's built-in "Diff Against Depot" works
-	// for free - it just needs this flag on to show up.
+	// FLoreSourceControlRevision::Get(), used by the File History window, already fetches historical content through "lore file write --revision".
+	// The editor's built-in "Diff Against Depot" therefore works without additional support and only needs this flag enabled to appear.
 	return true;
 }
 
@@ -369,8 +361,7 @@ TOptional<bool> FLoreSourceControlProvider::HasChangesToSync() const
 
 TOptional<bool> FLoreSourceControlProvider::HasChangesToCheckIn() const
 {
-	// Scans the cache instead of a per-scan flag - a narrow scan reporting "nothing dirty" shouldn't
-	// clobber a dirty file elsewhere that just wasn't part of it.
+	// Scans the cache instead of a per-scan flag - a narrow scan reporting "nothing dirty" shouldn't clobber a dirty file elsewhere that just wasn't part of it.
 	FScopeLock Lock(&CriticalSection);
 	for (const auto& Pair : StateCache)
 	{
@@ -478,8 +469,8 @@ bool FLoreSourceControlProvider::SetLoreBinaryPath(const FString& InPath)
 
 void FLoreSourceControlProvider::CheckLoreAvailability()
 {
-	// Resolve and probe the binary before taking the lock - both spawn external "lore --version"
-	// processes, and holding CriticalSection across those stalls every thread that touches a getter.
+	// Resolve and probe the binary before taking the lock because both operations spawn external "lore --version" processes.
+	// Holding CriticalSection across those processes stalls every thread that calls a getter.
 	const FString UserPath = FLoreSourceControlUtils::GetUserConfiguredLoreBinaryPath();
 
 	FString NewBinaryPath;
@@ -495,8 +486,7 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 		NewBinaryPath = FLoreSourceControlUtils::FindLoreBinaryPath();
 		bAvailable = !NewBinaryPath.IsEmpty() && FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath);
 
-		// Auto-apply a successfully discovered path so the setting is populated
-		// and the user doesn't have to manage "leave empty for auto-detection".
+		// Auto-apply a successfully discovered path so the setting is populated and the user doesn't have to manage "leave empty for auto-detection".
 		if (bAvailable)
 		{
 			FLoreSourceControlUtils::SetUserConfiguredLoreBinaryPath(NewBinaryPath);
@@ -538,9 +528,8 @@ void FLoreSourceControlProvider::CheckRepositoryStatus()
 {
 	FScopeLock Lock(&CriticalSection);
 
-	// Filesystem-only (looks for a ".lore" directory) - deliberately never invokes the lore
-	// binary here. Branch name and dirty/behind-remote flags are fetched asynchronously by
-	// FLoreConnectWorker so this can never block the calling thread on an external process.
+	// Filesystem-only (looks for a ".lore" directory) - deliberately never invokes the lore binary here.
+	// Branch name and dirty/behind-remote flags are fetched asynchronously by FLoreConnectWorker so this can never block the calling thread on an external process.
 	FString RepoRoot;
 	if (FLoreSourceControlUtils::FindRootDirectory(FPaths::ProjectDir(), RepoRoot))
 	{
@@ -580,9 +569,9 @@ ECommandResult::Type FLoreSourceControlProvider::ExecuteSynchronousCommand(FLore
 {
 	ECommandResult::Type Result = ECommandResult::Failed;
 
-	// Show a progress dialog (if Slate is up) while we wait. Ticking it - and Tick() below -
-	// keeps Slate pumping, so the editor stays responsive even if the underlying lore.exe call
-	// takes a while; it can never freeze the UI since the call itself runs on a pool thread.
+	// Show a progress dialog (if Slate is up) while we wait.
+	// Ticking the dialog and Tick() below keeps Slate pumping, so the editor remains responsive even if the underlying lore.exe call takes a while.
+	// The call itself runs on a pool thread and cannot freeze the UI.
 	{
 		FScopedSourceControlProgress Progress(Task);
 		IssueCommand(InCommand);
@@ -624,9 +613,9 @@ ECommandResult::Type FLoreSourceControlProvider::IssueCommand(FLoreSourceControl
 	InCommand.Operation->AddErrorMessge(Message);
 	InCommand.bCommandSuccessful = false;
 
-	// No pool thread will ever run this command, so mark it processed ourselves - otherwise
-	// ExecuteSynchronousCommand's wait loop would spin on bExecuteProcessed forever - and since
-	// it will never reach Tick() either, take over Tick()'s cleanup duty for auto-deleted (async) commands.
+	// No pool thread will run this command, so mark it processed here.
+	// Otherwise, ExecuteSynchronousCommand's wait loop would spin on bExecuteProcessed forever.
+	// The command will not reach Tick() either, so also handle Tick()'s cleanup duty for auto-deleted asynchronous commands.
 	FPlatformAtomics::InterlockedExchange(&InCommand.bExecuteProcessed, 1);
 	const ECommandResult::Type Result = InCommand.ReturnResults();
 
@@ -751,8 +740,7 @@ void FLoreSourceControlProvider::BroadcastStateChanged() const
 
 void FLoreSourceControlProvider::LoadSettings()
 {
-	// If still empty after load (no user override, no migration), leave it empty so that
-	// CheckLoreAvailability / FindLoreBinaryPath will perform full auto-detection.
+	// If still empty after load (no user override, no migration), leave it empty so that CheckLoreAvailability / FindLoreBinaryPath will perform full auto-detection.
 	FLoreSourceControlUtils::LoadSettings(LoreBinaryPath);
 }
 
@@ -763,9 +751,9 @@ void FLoreSourceControlProvider::SaveSettings() const
 
 void FLoreSourceControlProvider::UpdateCurrentBranchName()
 {
-	// GetCurrentBranchName shells out to lore.exe (up to three commands) and this runs on pool
-	// threads - holding CriticalSection across it would block the game thread's getters (branch
-	// name is polled by UI) for the whole exec duration. Copy inputs out, exec, then write back.
+	// GetCurrentBranchName shells out to lore.exe with up to three commands, and this code runs on pool threads.
+	// Holding CriticalSection across those commands would block game-thread getters, including the branch name polled by the UI, for the entire execution.
+	// Copy inputs out, exec, then write back.
 	FString LocalBinary;
 	FString LocalRoot;
 	bool bRepositoryFound;

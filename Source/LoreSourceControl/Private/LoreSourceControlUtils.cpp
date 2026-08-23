@@ -56,8 +56,7 @@ namespace FLoreSourceControlUtils
 		Paths.Add(TEXT("C:/Program Files/lore/bin/") + BinaryName);
 		Paths.Add(TEXT("C:/Program Files (x86)/lore/") + BinaryName);
 	#elif PLATFORM_MAC
-		// /usr/local/bin and /opt/homebrew/bin are standard PATH dirs - already covered by the
-		// direct PATH exec attempt above, so only non-PATH-guaranteed locations are listed here.
+		// /usr/local/bin and /opt/homebrew/bin are standard PATH dirs - already covered by the direct PATH exec attempt above, so only non-PATH-guaranteed locations are listed here.
 		Paths.Add(TEXT("/opt/lore/bin/") + BinaryName);
 		{
 			FString Home = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
@@ -72,8 +71,7 @@ namespace FLoreSourceControlUtils
 			}
 		}
 	#elif PLATFORM_LINUX
-		// /usr/local/bin and /usr/bin are standard PATH dirs - already covered by the direct PATH
-		// exec attempt above, so only non-PATH-guaranteed locations are listed here.
+		// /usr/local/bin and /usr/bin are standard PATH dirs - already covered by the direct PATH exec attempt above, so only non-PATH-guaranteed locations are listed here.
 		Paths.Add(TEXT("/opt/lore/bin/") + BinaryName);
 		{
 			FString Home = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
@@ -191,8 +189,7 @@ namespace FLoreSourceControlUtils
 		{
 			const FString Trimmed = Line.TrimStartAndEnd();
 
-			// remote_url/identity are top-level scalars written before any [table] - stop once we
-			// reach one, everything past that is a nested table (e.g. [store]) we don't need here.
+			// remote_url/identity are top-level scalars written before any [table] - stop once we reach one, everything past that is a nested table (e.g. [store]) we don't need here.
 			if (Trimmed.StartsWith(TEXT("[")))
 			{
 				break;
@@ -271,8 +268,8 @@ namespace FLoreSourceControlUtils
 		FString Results;
 		FString Errors;
 
-		// --json gives reliable structured output capture (avoids pager/anstream/human text quirks
-		// under piped exec from UE) - every internal caller needs it to parse events out of OutResults.
+		// --json provides reliable structured output capture and avoids pager, anstream, and human-text quirks when piping from UE.
+		// Every internal caller needs it to parse events from OutResults.
 		// lore [--json] <command> [params] ["files" ...]
 		FString FullCommand = bUseJson ? TEXT("--json ") : FString();
 		FullCommand += InCommand;
@@ -285,8 +282,7 @@ namespace FLoreSourceControlUtils
 
 		const FString WorkingDir = FPaths::ConvertRelativePathToFull(InRepositoryRoot.IsEmpty() ? FPaths::ProjectDir() : InRepositoryRoot);
 
-		// To make a path relative to a *directory* root (not a file), append a dummy leaf
-		// so that internal GetPath() in MakePathRelativeTo returns the directory itself.
+		// To make a path relative to a *directory* root (not a file), append a dummy leaf so that internal GetPath() in MakePathRelativeTo returns the directory itself.
 		FString RelativeToForMake = WorkingDir;
 		FPaths::NormalizeFilename(RelativeToForMake);
 		if (!RelativeToForMake.EndsWith(TEXT("/")))
@@ -308,8 +304,8 @@ namespace FLoreSourceControlUtils
 
 		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] %s %s (cwd=%s)"), *InLoreBinary, *FullCommand, *WorkingDir);
 
-		// Pass the correct working directory. Lore discovers the repository by walking up for a .lore folder,
-		// but running from the correct root makes status/stage/commit/sync more reliable across platforms.
+		// Pass the correct working directory.
+		// Lore discovers the repository by walking up for a .lore folder, but running from the correct root makes status/stage/commit/sync more reliable across platforms.
 		FPlatformProcess::ExecProcess(*InLoreBinary, *FullCommand, &ReturnCode, &Results, &Errors, *WorkingDir);
 
 		Results.ParseIntoArray(OutResults, TEXT("\n"), true);
@@ -399,9 +395,8 @@ namespace FLoreSourceControlUtils
 				InProvider.SetBranchName(Summary.BranchName);
 			}
 
-			// Safe to trust from any scan regardless of scope: "isRemoteAhead" is a whole-repository
-			// fact lore reports on every status call, never narrowed to the files actually scanned -
-			// unlike per-file dirty state (see FLoreSourceControlProvider::HasChangesToCheckIn).
+			// "isRemoteAhead" is safe to trust from a scan of any scope because Lore reports it as a whole-repository fact on every status call.
+			// It is never narrowed to the files scanned, unlike per-file dirty state (see FLoreSourceControlProvider::HasChangesToCheckIn).
 			InProvider.SetHasChangesToSync(Summary.bIsRemoteAhead);
 			InProvider.SetHasChangesToPush(Summary.bIsLocalAhead);
 		}
@@ -416,17 +411,17 @@ namespace FLoreSourceControlUtils
 			return true;
 		}
 
-		// Also query locks and merge in. A locked-but-unmodified file has no entry in OutStates yet
-		// (locking alone doesn't change content, so --scan never flagged it dirty) - synthesize a
-		// clean+checked-out state for any lock without a match, or its checkout icon never shows.
+		// Also query locks and merge in.
+		// A locked but unmodified file has no entry in OutStates because locking alone does not change content, so --scan never flags it as dirty.
+		// Synthesize a clean and checked-out state for every unmatched lock so its checkout icon appears.
 		TMap<FString, FString> LockedBy;
 		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages))
 		{
 			return false;
 		}
 
-		// "lock query" reports the owner as a raw user id - our own id is the repository's configured
-		// identity (.lore/config.toml), so compare against that; "me"/"self" kept as fallbacks.
+		// "lock query" reports the owner as a raw user ID, and our own ID is the repository's configured identity in .lore/config.toml.
+		// Compare against that identity, with "me" and "self" retained as fallbacks.
 		const FString OwnIdentity = InProvider.GetIdentity();
 
 		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FString& Owner)
@@ -471,8 +466,7 @@ namespace FLoreSourceControlUtils
 
 	void ParseStatusResults(const FString& InResults, const TArray<FString>& InFiles, const FString& InRepositoryRoot, TArray<FLoreSourceControlState>& OutStates, FLoreStatusSummary* OutSummary)
 	{
-		// RunLoreCommand always forces --json, so every line here is a JSON event - no plain-text
-		// status format ever reaches this function.
+		// RunLoreCommand always forces --json, so every line here is a JSON event - no plain-text status format ever reaches this function.
 
 		TArray<FString> Lines;
 		InResults.ParseIntoArray(Lines, TEXT("\n"), true);
@@ -574,10 +568,9 @@ namespace FLoreSourceControlUtils
 			}
 		}
 
-		// Emit a state for every dirty file found - must not be gated behind "no specific files
-		// requested": a directory-scoped scan (e.g. Sync/Connect warming the cache) passes that
-		// directory as the sole entry in InFiles, so keying off InFiles would collapse the whole
-		// recursive scan into one bogus per-directory state instead of real per-file results.
+		// Emit a state for every dirty file found, even when specific files were requested.
+		// A directory-scoped scan, such as Sync or Connect warming the cache, passes that directory as the sole entry in InFiles.
+		// Keying off InFiles would collapse the recursive scan into one bogus per-directory state instead of real per-file results.
 		for (const auto& Pair : FileStatuses)
 		{
 			const FParsedFileStatus& Parsed = Pair.Value;
@@ -630,9 +623,8 @@ namespace FLoreSourceControlUtils
 			}
 		}
 
-		// Also emit an explicit state for any specifically-requested real file that the scan did not
-		// flag as dirty, so single-file queries (e.g. right after CheckOut) get a proper SCC state/icon
-		// instead of falling back to the provider's generic "unknown file" default.
+		// Also emit an explicit state for every specifically requested real file that the scan did not flag as dirty.
+		// This gives single-file queries, such as one immediately after CheckOut, a proper SCC state and icon instead of the provider's generic "unknown file" default.
 		for (const FString& File : InFiles)
 		{
 			FString AbsFile = FPaths::ConvertRelativePathToFull(File);
@@ -667,9 +659,8 @@ namespace FLoreSourceControlUtils
 		TArray<FString> Results;
 		const bool bOk = RunLoreCommand(TEXT("file history"), InLoreBinary, InRepositoryRoot, TArray<FString>(), Files, Results, OutErrorMessages);
 
-		// Lore reports each revision as a "fileHistory" event, immediately followed by zero or more
-		// "metadata" events (message/created-by/timestamp/...) that belong to that same revision - so
-		// we only flush the entry we are building once the NEXT "fileHistory" (or the end) is reached.
+		// Lore reports each revision as a "fileHistory" event followed by zero or more related "metadata" events for its message, creator, timestamp, and other fields.
+		// Flush the entry only when the next "fileHistory" event or the end of the results is reached.
 		TSharedPtr<FLoreSourceControlRevision> Current;
 
 		for (const FString& Line : Results)
@@ -797,8 +788,7 @@ namespace FLoreSourceControlUtils
 			bool bIsCurrent = false;
 			Data->TryGetBoolField(TEXT("isCurrent"), bIsCurrent);
 
-			// "branch list" reports Local and Remote sections separately - the same branch usually
-			// shows up in both, so dedupe by name instead of tracking which section we're in.
+			// "branch list" reports Local and Remote sections separately - the same branch usually shows up in both, so dedupe by name instead of tracking which section we're in.
 			FLoreBranchInfo* Existing = OutBranches.FindByPredicate([&Name](const FLoreBranchInfo& Branch) { return Branch.Name == Name; });
 			if (Existing)
 			{
@@ -952,9 +942,8 @@ namespace FLoreSourceControlUtils
 
 	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy, TArray<FString>* OutErrorMessages)
 	{
-		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the
-		// broad Connect/Sync scan passes) silently matches nothing. "lock query" filtered by --branch
-		// lists every lock on the branch regardless of path - what we actually want either way.
+		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the broad Connect/Sync scan passes) silently matches nothing.
+		// "lock query" filtered by --branch lists every lock on the branch regardless of path - what we actually want either way.
 		const FString CurrentBranch = InProvider.GetBranchName();
 
 		TArray<FString> Results;

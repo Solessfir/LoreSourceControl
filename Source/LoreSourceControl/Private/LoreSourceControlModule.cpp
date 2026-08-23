@@ -90,8 +90,7 @@ void FLoreSourceControlModule::StartupModule()
 				return;
 			}
 
-			// Refresh the editor's own state cache (Content Browser icons, etc.) - this leg always needs
-			// --json, same as every other internal caller.
+			// Refresh the editor's own state cache (Content Browser icons, etc.) - this leg always needs --json, same as every other internal caller.
 			const TSharedRef<FUpdateStatus> StatusOp = ISourceControlOperation::Create<FUpdateStatus>();
 			LoreSourceControlProvider.Execute(StatusOp, TArray<FString>{ FPaths::ProjectDir() }, EConcurrency::Asynchronous);
 
@@ -118,14 +117,12 @@ void FLoreSourceControlModule::StartupModule()
 	);
 
 #if SOURCE_CONTROL_WITH_SLATE
-	// Headless commandlets (cook, UAT, etc.) load this module too but never initialize Slate - skip all
-	// UI registration in that case, since MainFrame/toolbar/window delegates all require a live Slate app.
+	// Headless commandlets (cook, UAT, etc.) load this module too but never initialize Slate.
+	// Skip all UI registration in that case because MainFrame, toolbar, and window delegates require a live Slate app.
 	if (FSlateApplication::IsInitialized())
 	{
-		// The engine's own Revision Control widget registers inside SStatusBar::Construct(), which only runs
-		// once the level editor's main tab is built - well after this module loads. Registering via
-		// UToolMenus::RegisterStartupCallback (module load time) would be too early for that widget to exist
-		// yet, so wait for the main frame instead.
+		// The engine's own Revision Control widget registers inside SStatusBar::Construct(), which only runs once the level editor's main tab is built - well after this module loads.
+		// Registering via UToolMenus::RegisterStartupCallback (module load time) would be too early for that widget to exist yet, so wait for the main frame instead.
 		IMainFrameModule& MainFrameModule = FModuleManager::LoadModuleChecked<IMainFrameModule>("MainFrame");
 		if (MainFrameModule.IsWindowInitialized())
 		{
@@ -136,15 +133,12 @@ void FLoreSourceControlModule::StartupModule()
 			MainFrameModule.OnMainFrameCreationFinished().AddRaw(this, &FLoreSourceControlModule::OnMainFrameCreationFinished);
 		}
 
-		// The branch switcher's entry only appears once Lore is connected (see RegisterToolbarExtension) -
-		// refresh the toolbar whenever that state changes so it appears/disappears without an editor restart.
-		SourceControlStateChangedHandle = LoreSourceControlProvider.RegisterSourceControlStateChanged_Handle(
-			FSourceControlStateChanged::FDelegate::CreateRaw(this, &FLoreSourceControlModule::RefreshToolbarExtension));
+		// The branch switcher's entry only appears once Lore is connected (see RegisterToolbarExtension).
+		// Refresh the toolbar whenever that state changes so it appears or disappears without an editor restart.
+		SourceControlStateChangedHandle = LoreSourceControlProvider.RegisterSourceControlStateChanged_Handle(FSourceControlStateChanged::FDelegate::CreateRaw(this, &FLoreSourceControlModule::RefreshToolbarExtension));
 
-		// Toggling "Enable Source Control" (or switching providers) in Editor Preferences doesn't touch
-		// our own provider's state at all, so it needs its own refresh trigger.
-		SourceControlProviderChangedHandle = ISourceControlModule::Get().RegisterProviderChanged(
-			FSourceControlProviderChanged::FDelegate::CreateRaw(this, &FLoreSourceControlModule::OnSourceControlProviderChanged));
+		// Toggling "Enable Source Control" (or switching providers) in Editor Preferences doesn't touch our own provider's state at all, so it needs its own refresh trigger.
+		SourceControlProviderChangedHandle = ISourceControlModule::Get().RegisterProviderChanged(FSourceControlProviderChanged::FDelegate::CreateRaw(this, &FLoreSourceControlModule::OnSourceControlProviderChanged));
 
 		// See OnWindowBeingDestroyed()'s comment - catches the Submit dialog closing (accept or cancel).
 		WindowBeingDestroyedHandle = FSlateApplication::Get().OnWindowBeingDestroyed().AddRaw(this, &FLoreSourceControlModule::OnWindowBeingDestroyed);
@@ -258,9 +252,8 @@ void FLoreSourceControlModule::RegisterToolbarExtension()
 {
 	RegisterToolbarExtensionForMenu(TEXT("LevelEditor.StatusBar.ToolBar"));
 
-	// Asset editors (Blueprint, Material, etc.) don't share the level editor's status bar and have no
-	// fixed menu name to register against ahead of time - mirror the engine's own Source Control
-	// widget (SStatusBar::RegisterSourceControlStatus) and extend each one as it opens instead.
+	// Asset editors (Blueprint, Material, etc.) don't share the level editor's status bar and have no fixed menu name to register against ahead of time.
+	// Mirror the engine's own Source Control widget (SStatusBar::RegisterSourceControlStatus) and extend each asset editor as it opens instead.
 	if (GEditor)
 	{
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
@@ -277,8 +270,8 @@ void FLoreSourceControlModule::OnAssetEditorOpened(UObject* InAsset, IAssetEdito
 		return;
 	}
 
-	// GetEditorName is part of IAssetEditorInstance and works for toolkit-based editors, UAssetEditor,
-	// and other implementations. The status bar strips FName instance suffixes the same way.
+	// GetEditorName is part of IAssetEditorInstance and works for toolkit-based editors, UAssetEditor, and other implementations.
+	// The status bar strips FName instance suffixes the same way.
 	const FName EditorName = InInstance->GetEditorName();
 	if (EditorName.IsNone())
 	{
@@ -307,15 +300,13 @@ void FLoreSourceControlModule::RegisterToolbarExtensionForMenu(FName InMenuName)
 
 	FToolMenuSection& Section = Menu->FindOrAddSection("SourceControlActions");
 
-	// Dynamic entry so this re-evaluates every time the toolbar regenerates - if Lore isn't the
-	// active/available provider, skip adding the entry entirely (a Collapsed widget would still
-	// reserve its slot and add a stray separator).
+	// This dynamic entry is reevaluated every time the toolbar regenerates.
+	// If Lore isn't the active and available provider, skip the entry entirely because a Collapsed widget would still reserve its slot and add a stray separator.
 	Section.AddDynamicEntry("LoreBranchSwitcher", FNewToolMenuSectionDelegate::CreateLambda([this](FToolMenuSection& InSection)
 	{
-		// Not checking SCModule.IsEnabled() here - it's intentionally false for the entire duration
-		// of the internal connect flow (FScopedDisableSourceControl), which would hide us right after
-		// a successful reconnect. The active provider name alone already distinguishes "disabled"
-		// (provider is reset to "None") from "connecting" (provider stays "Lore" throughout).
+		// Do not check SCModule.IsEnabled() here.
+		// It is intentionally false throughout the internal connect flow (FScopedDisableSourceControl), which would hide us right after a successful reconnect.
+		// The active provider name alone already distinguishes "disabled" (provider is reset to "None") from "connecting" (provider stays "Lore" throughout).
 		const bool bLoreIsActiveProvider = ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName();
 		if (!bLoreIsActiveProvider || !LoreSourceControlProvider.IsAvailable())
 		{
@@ -333,8 +324,7 @@ void FLoreSourceControlModule::RegisterToolbarExtensionForMenu(FName InMenuName)
 			SNew(SComboButton)
 			.ComboButtonStyle(&FAppStyle::Get().GetWidgetStyle<FComboButtonStyle>("SimpleComboButton"))
 			.ContentPadding(FMargin(4.f, 0.f))
-			// Default MenuPlacement_ComboBox forces the dropdown's width to match this (narrow)
-			// button's width, squeezing/centering wider menu content instead of sizing it naturally.
+			// Default MenuPlacement_ComboBox forces the dropdown's width to match this (narrow) button's width, squeezing/centering wider menu content instead of sizing it naturally.
 			.MenuPlacement(MenuPlacement_BelowAnchor)
 			.OnGetMenuContent(FOnGetContent::CreateRaw(this, &FLoreSourceControlModule::GenerateBranchMenu))
 			.ToolTipText(LOCTEXT("BranchSwitcherTooltip", "Lore actions"))
@@ -372,8 +362,7 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 
 	TArray<FLoreBranchInfo> Branches = LoreSourceControlProvider.GetCachedBranches();
 
-	// Refresh in the background for next time - shelling out to lore.exe synchronously here would
-	// hang the menu open animation for however long that takes.
+	// Refresh in the background for next time - shelling out to lore.exe synchronously here would hang the menu open animation for however long that takes.
 	LoreSourceControlProvider.RefreshBranchesAsync();
 
 	FMenuBuilder MenuBuilder(true, nullptr);
@@ -438,8 +427,8 @@ TSharedRef<SWidget> FLoreSourceControlModule::GenerateBranchMenu()
 	}
 	MenuBuilder.EndSection();
 
-	// Without a height cap, SScrollBox sizes to its unconstrained content height and never actually
-	// scrolls - with enough branches the dropdown would just grow off the bottom of the screen.
+	// Without a height cap, SScrollBox sizes to its unconstrained content height and never actually scrolls.
+	// With enough branches, the dropdown would grow off the bottom of the screen.
 	return SNew(SBox)
 		.MaxDesiredHeight(300.f)
 		[
@@ -499,8 +488,8 @@ void FLoreSourceControlModule::OnBranchSwitchComplete(const FSourceControlOperat
 
 void FLoreSourceControlModule::OnSyncClicked()
 {
-	// Queued asynchronously - FLoreSyncWorker::UpdateStates() (called from FLoreSourceControlProvider::Tick()
-	// once this completes) handles the Content auto-reload / restart prompt, same as branch switch does.
+	// Queue this asynchronously.
+	// FLoreSyncWorker::UpdateStates() is called from FLoreSourceControlProvider::Tick() when the operation completes and handles the Content auto-reload or restart prompt, as it does for branch switches.
 	const TSharedRef<FSync> SyncOp = ISourceControlOperation::Create<FSync>();
 	LoreSourceControlProvider.Execute(SyncOp, EConcurrency::Asynchronous);
 }

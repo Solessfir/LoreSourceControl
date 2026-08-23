@@ -14,9 +14,9 @@
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
 
-// Quote a free-form string (e.g. a commit message) as a single command-line argument. Escaping only
-// the quotes is not enough: backslashes that precede a quote (or the end of the argument) must be
-// doubled, or a message ending in '\' swallows the closing quote and corrupts the whole command line.
+// Quote a free-form string (e.g. a commit message) as a single command-line argument.
+// Escaping only the quotes is not enough.
+// Backslashes that precede a quote or the end of the argument must be doubled; otherwise, a message ending in '\' swallows the closing quote and corrupts the whole command line.
 static FString QuoteCommandLineArgument(const FString& InArg)
 {
 	FString Escaped;
@@ -64,16 +64,15 @@ static FString NormalizeComparisonPath(const FString& InPath)
 //-----------------------------------------------------------------------------
 bool FLoreConnectWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	// Runs off the game thread (see FLoreSourceControlProvider::Init / IssueCommand). Must go through
-	// InCommand.Provider (captured on the game thread) rather than looking it up via FModuleManager/
-	// ISourceControlModule here - doing that from a pool thread has raced the game thread and deadlocked.
+	// Runs off the game thread (see FLoreSourceControlProvider::Init / IssueCommand).
+	// Use InCommand.Provider, which was captured on the game thread.
+	// Looking it up through FModuleManager or ISourceControlModule from a pool thread has raced the game thread and deadlocked.
 	FLoreSourceControlProvider& LoreProvider = *InCommand.Provider;
 	LoreProvider.UpdateCurrentBranchName();
 
-	// Scan the whole Content tree once up front and warm the state cache with it, so the Content
-	// Browser shows real checkout/lock/modified icons immediately - without this, per-asset states
-	// stay on the provider's generic "unknown file" default until something else happens to query
-	// that exact file, which is why a manual Revision Control > Refresh was needed after every launch.
+	// Scan the entire Content tree up front to warm the state cache and immediately show real checkout, lock, and modified icons in the Content Browser.
+	// Otherwise, per-asset states remain on the provider's generic "unknown file" default until another action queries the exact file.
+	// This is why Revision Control > Refresh previously had to be run after every launch.
 	TArray<FString> ContentDir;
 	ContentDir.Add(FPaths::ProjectContentDir());
 	StateScanPaths = ContentDir;
@@ -170,8 +169,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		return false;
 	}
 
-	// `lore commit` commits the entire stage. Verify the stage contains no unrelated file before
-	// invoking it, preserving the user's existing stage instead of silently committing extra work.
+	// `lore commit` commits the entire stage.
+	// Verify the stage contains no unrelated file before invoking it, preserving the user's existing stage instead of silently committing extra work.
 	TArray<FString> StagedFiles;
 	if (!FLoreSourceControlUtils::RunGetStagedFiles(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, StagedFiles, InCommand.ErrorMessages))
 	{
@@ -215,8 +214,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	InCommand.InfoMessages.Append(CommitResults);
 	InCommand.ErrorMessages.Append(CommitErrors);
 
-	// Push right after commit - a commit that only lives locally isn't "submitted" from the rest of
-	// the team's point of view, matching the P4/Git "Submit = it's on the server now" expectation.
+	// A commit that only lives locally is not "submitted" from the rest of the team's point of view.
+	// Push right after committing to match the P4/Git expectation that "Submit" means the change is on the server.
 	bool bPushed = false;
 	if (InCommand.bCommandSuccessful)
 	{
@@ -234,8 +233,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		}
 	}
 
-	// The change is now committed, so there is nothing left to protect by holding the lock -
-	// release it, same as Revert. Best-effort: a file that was never locked has nothing to release.
+	// The change is now committed, so there is nothing left to protect by holding the lock - release it, same as Revert.
+	// Best-effort: a file that was never locked has nothing to release.
 	if (InCommand.bCommandSuccessful && bPushed && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
@@ -255,8 +254,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		// But we can log that user may want to "Reload All" or use the Sync action which triggers more.
 		InCommand.InfoMessages.Add(TEXT("Commit successful. You may need to reload modified assets in the Content Browser."));
 
-		// The engine's Submit dialog reads this for its success toast (Operation->GetSuccessMessage()) -
-		// Git/Perforce/Plastic all set it the same way; without it the notification title is blank.
+		// The engine's Submit dialog reads this for its success toast through Operation->GetSuccessMessage().
+		// Git, Perforce, and Plastic set it the same way; without it, the notification title is blank.
 		Operation->SetSuccessMessage(FText::Format(
 			LOCTEXT("CheckInSuccess", "Submitted revision \"{0}\"."),
 			FText::FromString(CommitMessage)));
@@ -353,9 +352,8 @@ bool FLoreUpdateStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 	StateScanPaths = InCommand.Files.IsEmpty() ? TArray<FString>{ InCommand.PathToRepositoryRoot } : InCommand.Files;
 	bApplyStateResults = InCommand.bCommandSuccessful;
 
-	// History is a separate, per-file "lore file history" call - only worth the extra round trips
-	// when something actually asked for it (the History window sets this), not on every routine
-	// status refresh.
+	// History requires a separate "lore file history" call for every file.
+	// Make those extra round trips only when requested, such as when the History window sets this option, rather than on every routine status refresh.
 	const TSharedRef<FUpdateStatus> Operation = StaticCastSharedRef<FUpdateStatus>(InCommand.Operation);
 	if (Operation->ShouldUpdateHistory())
 	{
@@ -398,16 +396,14 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 	}
 	else
 	{
-		// Locking disabled (ULoreSourceControlSettings::bLockFiles) - Check Out just needs to make
-		// the files available to edit locally, which they already always are (Lore never enforces
-		// local read-only state either way), so there is nothing left to do here.
+		// With ULoreSourceControlSettings::bLockFiles disabled, Check Out only needs to make the files editable locally.
+		// The files are already editable because Lore never enforces local read-only state, so there is nothing to do here.
 		InCommand.bCommandSuccessful = true;
 	}
 
 	if (InCommand.bCommandSuccessful)
 	{
-		// Lore lock acquire is advisory; ensure the files are writable on disk so UE editor
-		// accepts the checkout and does not warn "writable on disk but not checked out".
+		// Lore lock acquire is advisory; ensure the files are writable on disk so UE editor accepts the checkout and does not warn "writable on disk but not checked out".
 		for (const FString& F : InCommand.Files)
 		{
 			FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*F, false);
@@ -418,8 +414,8 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 	StateScanPaths = InCommand.Files;
 	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
-	// Optimistically ensure checkout state for the files we successfully locked (in case post-acquire lock status
-	// reports nothing due to capture/owner/branch timing; the acquire RC already confirmed success).
+	// Optimistically ensure checkout state for the files we successfully locked.
+	// A post-acquire status query can report nothing due to capture, owner, or branch timing, but the acquire return code already confirmed success.
 	if (bShouldLock && InCommand.bCommandSuccessful)
 	{
 		for (FLoreSourceControlState& S : States)
@@ -451,9 +447,8 @@ bool FLoreRevertWorker::Execute(FLoreSourceControlCommand& InCommand)
 	InCommand.InfoMessages.Append(Results);
 	InCommand.ErrorMessages.Append(Errors);
 
-	// Reverting local edits also gives up any lock held on the file - there is nothing left to
-	// check in, so there is no reason to keep it locked. Best-effort: a file that was never locked
-	// simply has nothing to release, so this does not affect InCommand.bCommandSuccessful.
+	// Reverting local edits also gives up any lock held on the file - there is nothing left to check in, so there is no reason to keep it locked.
+	// Best-effort: a file that was never locked simply has nothing to release, so this does not affect InCommand.bCommandSuccessful.
 	if (InCommand.bCommandSuccessful && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
@@ -478,9 +473,8 @@ bool FLoreRevertWorker::UpdateStates() const
 //-----------------------------------------------------------------------------
 bool FLoreMarkForAddWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	// Deliberately does not call `lore stage` here - staging is left entirely to CheckIn's own
-	// unconditional `stage --scan` right before commit, same as modified files. Keeps "staged in
-	// lore" meaning only one thing: about to be committed, not "the editor touched it at some point".
+	// Deliberately does not call `lore stage` here - staging is left entirely to CheckIn's own unconditional `stage --scan` right before commit, same as modified files.
+	// Keeps "staged in lore" meaning only one thing: about to be committed, not "the editor touched it at some point".
 	StateScanPaths = InCommand.Files;
 	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 	InCommand.bCommandSuccessful = bApplyStateResults;
@@ -508,8 +502,8 @@ bool FLoreDeleteWorker::Execute(FLoreSourceControlCommand& InCommand)
 		FLoreSourceControlState CachedState(File);
 		if (InCommand.Provider->TryGetStateFromCache(File, CachedState) && CachedState.IsAdded())
 		{
-			// A never-staged add needs no Lore-side delete action. A staged add must be removed
-			// from the stage so a later repository-wide commit cannot resurrect it.
+			// A never-staged add needs no Lore-side delete action.
+			// A staged add must be removed from the stage so a later repository-wide commit cannot resurrect it.
 			if (CachedState.bIsStaged)
 			{
 				FilesToUnstage.Add(File);
@@ -665,8 +659,8 @@ bool FLoreSwitchBranchWorker::UpdateStates() const
 		return false;
 	}
 
-	// The working copy changed underneath every cached state. Always discard the old cache, even
-	// if the follow-up status query failed, so callers never consume pre-switch state.
+	// The working copy changed underneath every cached state.
+	// Always discard the old cache, even if the follow-up status query failed, so callers never consume pre-switch state.
 	Provider->ClearStateCache();
 	FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 
