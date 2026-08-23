@@ -32,6 +32,7 @@
 #include "Styling/AppStyle.h"
 #include "Interfaces/IMainFrameModule.h"
 #include "Editor.h"
+#include "FileHelpers.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #endif
 
@@ -462,10 +463,14 @@ void FLoreSourceControlModule::OnBranchSelected(FString InBranchName)
 	}
 
 	const FText ConfirmText = FText::Format(
-		LOCTEXT("SwitchBranchConfirm", "Switch to branch '{0}'?\n\nFiles in the working copy may change. Save any unsaved work first; affected Content will be reloaded, or you will be asked to restart if Source/Config changed."),
+		LOCTEXT("SwitchBranchConfirm", "Switch to branch '{0}'?\n\nFiles in the working copy may change. Unreal will ask you to save unsaved maps and assets before continuing."),
 		FText::FromString(InBranchName));
 
 	if (FMessageDialog::Open(EAppMsgType::YesNo, ConfirmText) != EAppReturnType::Yes)
+	{
+		return;
+	}
+	if (!FEditorFileUtils::SaveDirtyPackages(true, true, true, false, false, false))
 	{
 		return;
 	}
