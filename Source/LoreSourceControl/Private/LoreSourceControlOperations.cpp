@@ -10,9 +10,21 @@
 #include "HAL/PlatformFileManager.h"
 #if SOURCE_CONTROL_WITH_SLATE
 #include "Misc/MessageDialog.h"
+#include "UnrealEdMisc.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
+
+#if SOURCE_CONTROL_WITH_SLATE
+static void OfferEditorRestart(const FText& Reason)
+{
+	const FText Message = FText::Format(LOCTEXT("RestartEditorPrompt", "{0}\n\nRestart the editor now? You will be prompted to save any remaining changes before it closes."), Reason);
+	if (FMessageDialog::Open(EAppMsgType::YesNo, Message, LOCTEXT("RestartEditorTitle", "Editor Restart Required")) == EAppReturnType::Yes)
+	{
+		FUnrealEdMisc::Get().RestartEditor(false);
+	}
+}
+#endif
 
 static FString NormalizeComparisonPath(const FString& InPath)
 {
@@ -308,7 +320,7 @@ bool FLoreSyncWorker::UpdateStates() const
 #if SOURCE_CONTROL_WITH_SLATE
 	if (bSyncSucceeded && bRequiresRestart)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("Sync complete. Source/Config files changed - restart the editor now to pick up the new code.")));
+		OfferEditorRestart(LOCTEXT("SyncRestartReason", "Sync completed, but Source or Config files changed."));
 	}
 #endif
 
@@ -651,7 +663,7 @@ bool FLoreSwitchBranchWorker::UpdateStates() const
 #if SOURCE_CONTROL_WITH_SLATE
 	if (bRequiresRestart)
 	{
-		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("SwitchBranchRestart", "Branch switched. Please restart the editor now to pick up the new Source/Config changes."));
+		OfferEditorRestart(LOCTEXT("SwitchBranchRestartReason", "The branch switched, but Source or Config files changed."));
 	}
 #endif
 
