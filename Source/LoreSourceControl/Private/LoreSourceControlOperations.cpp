@@ -111,7 +111,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// A query failure is a hard stop: stale cache data must never be treated as permission to submit.
 	if (InCommand.bShouldLockFiles)
 	{
-		TMap<FString, FString> LockedBy;
+		TMap<FString, FLoreLockOwner> LockedBy;
 		if (!FLoreSourceControlUtils::GetLoreLockStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, *InCommand.Provider, LockedBy, &InCommand.ErrorMessages))
 		{
 			InCommand.ErrorMessages.Add(TEXT("Submit aborted because current lock ownership could not be verified."));
@@ -122,22 +122,23 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		for (const FString& File : InCommand.Files)
 		{
 			const FString NormalizedFile = NormalizeComparisonPath(File);
-			for (const TPair<FString, FString>& Lock : LockedBy)
+			for (const TPair<FString, FLoreLockOwner>& Lock : LockedBy)
 			{
 				if (NormalizeComparisonPath(Lock.Key) != NormalizedFile)
 				{
 					continue;
 				}
 
-				const bool bOwnLock = Lock.Value.Equals(TEXT("me"), ESearchCase::IgnoreCase)
-					|| Lock.Value.Equals(TEXT("self"), ESearchCase::IgnoreCase)
-					|| (!OwnIdentity.IsEmpty() && Lock.Value.Equals(OwnIdentity, ESearchCase::IgnoreCase));
+				const bool bOwnLock = Lock.Value.Identity.Equals(TEXT("me"), ESearchCase::IgnoreCase)
+					|| Lock.Value.Identity.Equals(TEXT("self"), ESearchCase::IgnoreCase)
+					|| (!OwnIdentity.IsEmpty() && Lock.Value.Identity.Equals(OwnIdentity, ESearchCase::IgnoreCase));
 				if (!bOwnLock)
 				{
+					const FString LockOwner = Lock.Value.GetDisplayName();
 					InCommand.ErrorMessages.Add(FString::Printf(
 						TEXT("Submit aborted: %s is locked by %s."),
 						*FPaths::GetCleanFilename(File),
-						Lock.Value.IsEmpty() ? TEXT("another user") : *Lock.Value));
+						LockOwner.IsEmpty() ? TEXT("another user") : *LockOwner));
 					return false;
 				}
 			}

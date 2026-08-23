@@ -414,7 +414,7 @@ namespace FLoreSourceControlUtils
 		// Also query locks and merge in.
 		// A locked but unmodified file has no entry in OutStates because locking alone does not change content, so --scan never flags it as dirty.
 		// Synthesize a clean and checked-out state for every unmatched lock so its checkout icon appears.
-		TMap<FString, FString> LockedBy;
+		TMap<FString, FLoreLockOwner> LockedBy;
 		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages))
 		{
 			return false;
@@ -424,23 +424,22 @@ namespace FLoreSourceControlUtils
 		// Compare against that identity, with "me" and "self" retained as fallbacks.
 		const FString OwnIdentity = InProvider.GetIdentity();
 
-		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FString& Owner)
+		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FLoreLockOwner& Owner)
 		{
-			// "<unknown>" means lore's server couldn't resolve who acquired the lock (no auth endpoint configured, or an unresolvable token)
-			const bool bOther = !Owner.Equals(TEXT("me"), ESearchCase::IgnoreCase)
-				&& !Owner.Equals(TEXT("self"), ESearchCase::IgnoreCase)
-				&& (OwnIdentity.IsEmpty() || !Owner.Equals(OwnIdentity, ESearchCase::IgnoreCase));
+			const bool bOther = !Owner.Identity.Equals(TEXT("me"), ESearchCase::IgnoreCase)
+				&& !Owner.Identity.Equals(TEXT("self"), ESearchCase::IgnoreCase)
+				&& (OwnIdentity.IsEmpty() || !Owner.Identity.Equals(OwnIdentity, ESearchCase::IgnoreCase));
 			State.bIsCheckedOut = !bOther;
 			State.bIsCheckedOutOther = bOther;
 			if (bOther)
 			{
-				State.CheckedOutOther = Owner;
+				State.CheckedOutOther = Owner.GetDisplayName();
 			}
 		};
 
 		for (FLoreSourceControlState& State : OutStates)
 		{
-			if (const FString* Owner = LockedBy.Find(State.LocalFilename); Owner && !Owner->IsEmpty())
+			if (const FLoreLockOwner* Owner = LockedBy.Find(State.LocalFilename); Owner && !Owner->Identity.IsEmpty())
 			{
 				ApplyLockOwner(State, *Owner);
 				LockedBy.Remove(State.LocalFilename);
@@ -449,7 +448,7 @@ namespace FLoreSourceControlUtils
 
 		for (const auto& Pair : LockedBy)
 		{
-			if (Pair.Value.IsEmpty())
+			if (Pair.Value.Identity.IsEmpty())
 			{
 				continue;
 			}
@@ -940,7 +939,7 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy, TArray<FString>* OutErrorMessages)
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages)
 	{
 		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the broad Connect/Sync scan passes) silently matches nothing.
 		// "lock query" filtered by --branch lists every lock on the branch regardless of path - what we actually want either way.
@@ -1009,15 +1008,17 @@ namespace FLoreSourceControlUtils
 				FString Abs = FPaths::Combine(RepoAbs, Path);
 				FPaths::NormalizeFilename(Abs);
 				Abs = Abs.Replace(TEXT("\\"), TEXT("/"));
-				OutLockedBy.Add(Abs, Owner);
+				FLoreLockOwner LockOwner;
+				LockOwner.Identity = Owner;
+				OutLockedBy.Add(Abs, MoveTemp(LockOwner));
 			}
 		}
 
-		for (TPair<FString, FString>& Lock : OutLockedBy)
+		for (TPair<FString, FLoreLockOwner>& Lock : OutLockedBy)
 		{
-			if (const FString* ResolvedName = OwnerNames.Find(Lock.Value))
+			if (const FString* ResolvedName = OwnerNames.Find(Lock.Value.Identity))
 			{
-				Lock.Value = *ResolvedName;
+				Lock.Value.DisplayName = *ResolvedName;
 			}
 		}
 

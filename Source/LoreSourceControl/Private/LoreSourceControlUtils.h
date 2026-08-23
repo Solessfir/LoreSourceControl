@@ -28,6 +28,18 @@ struct FLoreStatusSummary
 	bool bIsLocalAhead = false;
 };
 
+/** A Lore lock owner, retaining both the stable identity and its human-readable name. */
+struct FLoreLockOwner
+{
+	FString Identity;
+	FString DisplayName;
+
+	FString GetDisplayName() const
+	{
+		return DisplayName.IsEmpty() ? Identity : DisplayName;
+	}
+};
+
 namespace FLoreSourceControlUtils
 {
 	/**
@@ -126,7 +138,7 @@ namespace FLoreSourceControlUtils
 	 * Unlike "lock status", this needs no file list - it lists every locked path in one call,
 	 * which is what both a broad refresh and a single-file one actually need.
 	 */
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FString>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
 
 	/** Return every staged file in the repository, as normalized absolute paths. */
 	bool RunGetStagedFiles(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutErrorMessages);
