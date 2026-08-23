@@ -13,7 +13,7 @@ Unreal Engine plugin implementing `ISourceControlProvider` for [lore](https://gi
 ## Features
 
 - **Sync** - pull latest (`lore sync`) from the toolbar dropdown, with progress and completion feedback
-- **Commit** - stages, commits, and auto-pushes to remote in one step
+- **Commit** - stages and commits in one step, then auto-pushes when a remote is configured
 - **Lock / Unlock** - advisory file locking (`lore lock acquire` / `lore lock release`)
 - **Branch Switching** - toolbar dropdown next to the Revision Control icon, with unsaved-work protection, progress feedback, and asset reload or restart handling
 - **File History** - revision browsing, diffing, and "Diff Against Depot"
@@ -45,7 +45,7 @@ To initialize the current directory as a fully local repository without a server
 lore repository create --offline --identity your-name my-project
 ```
 
-Lore does not use a separate `init` command. The offline form above creates the `.lore` directory in the current directory and leaves `remote_url` empty. Disable **Use Lore Locks On Check Out** for a local-only repository because Lore locks require a server. The plugin's Submit action always tries to push, so use `lore stage` and `lore commit` directly for local-only commits.
+Lore does not use a separate `init` command. The offline form above creates the `.lore` directory in the current directory and leaves `remote_url` empty. The standard Submit action commits locally and skips pushing when no remote is configured. Lore locks are also skipped automatically because they require a server.
 
 ## Getting Started
 
@@ -65,7 +65,7 @@ Lore does not use a separate `init` command. The offline form above creates the 
 
 - **`LoreSync`** - performs a Lore sync (pull) and updates source control states.
 - **`LoreStatus`** - force-refreshes Lore source control status for the project and prints Lore's human-readable status to the log.
-- **`LoreCommit`** - opens the Submit Files dialog to stage, commit, and push pending changes.
+- **`LoreCommit`** - opens the Submit Files dialog to stage and commit pending changes, then pushes when a remote is configured.
 
 ## Notes
 

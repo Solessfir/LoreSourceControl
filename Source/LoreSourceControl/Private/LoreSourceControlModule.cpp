@@ -152,13 +152,13 @@ void FLoreSourceControlModule::StartupModule()
 
 	LoreCommitCommand = IConsoleManager::Get().RegisterConsoleCommand(
 		TEXT("LoreCommit"),
-		TEXT("Open the Submit Files dialog to commit and push pending changes via Lore."),
+		TEXT("Open the Submit Files dialog to commit pending changes via Lore and push when a remote is configured."),
 		FConsoleCommandDelegate::CreateLambda([this]()
 		{
 #if SOURCE_CONTROL_WITH_SLATE
 			if (ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName())
 			{
-				// Same dialog as the toolbar's "Submit Content" - drives our CheckIn worker (commit + push).
+				// Same dialog as the toolbar's "Submit Content" - drives our CheckIn worker and pushes when a remote is configured.
 				FSourceControlWindows::ChoosePackagesToCheckIn();
 			}
 #endif

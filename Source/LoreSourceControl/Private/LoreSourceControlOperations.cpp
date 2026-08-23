@@ -210,10 +210,10 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	InCommand.InfoMessages.Append(CommitResults);
 	InCommand.ErrorMessages.Append(CommitErrors);
 
-	// A commit that only lives locally is not "submitted" from the rest of the team's point of view.
-	// Push right after committing to match the P4/Git expectation that "Submit" means the change is on the server.
+	// Push after committing when the repository has a remote. Offline repositories use the same Submit flow but keep the commit local.
+	const bool bHasRemote = !InCommand.Provider->GetRemoteUrl().IsEmpty();
 	bool bPushed = false;
-	if (InCommand.bCommandSuccessful)
+	if (InCommand.bCommandSuccessful && bHasRemote)
 	{
 		TArray<FString> PushResults;
 		TArray<FString> PushErrors;
@@ -228,10 +228,14 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 			InCommand.bCommandSuccessful = false;
 		}
 	}
+	else if (InCommand.bCommandSuccessful)
+	{
+		InCommand.InfoMessages.Add(TEXT("No remote is configured. The commit was kept locally."));
+	}
 
 	// The change is now committed, so there is nothing left to protect by holding the lock - release it, same as Revert.
 	// Best-effort: a file that was never locked has nothing to release.
-	if (InCommand.bCommandSuccessful && bPushed && InCommand.bShouldLockFiles)
+	if (InCommand.bCommandSuccessful && bHasRemote && bPushed && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
 		FLoreSourceControlUtils::RunLoreCommand(TEXT("lock release"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
@@ -239,7 +243,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// Refresh states for the files
 	StateScanPaths = InCommand.Files;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, bHasRemote && InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
 	InCommand.Provider->UpdateCurrentBranchName();
 
@@ -253,7 +257,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		// The engine's Submit dialog reads this for its success toast through Operation->GetSuccessMessage().
 		// Git, Perforce, and Plastic set it the same way; without it, the notification title is blank.
 		Operation->SetSuccessMessage(FText::Format(
-			LOCTEXT("CheckInSuccess", "Submitted revision \"{0}\"."),
+			bHasRemote ? LOCTEXT("CheckInSuccess", "Submitted revision \"{0}\".") : LOCTEXT("LocalCheckInSuccess", "Committed revision \"{0}\" locally."),
 			FText::FromString(CommitMessage)));
 	}
 
