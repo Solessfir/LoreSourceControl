@@ -9,6 +9,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
+#include "Logging/StructuredLog.h"
 #include "UObject/UObjectGlobals.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -450,7 +451,7 @@ namespace FLoreSourceControlUtils
 			FullCommand += TEXT("\"");
 		}
 
-		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] %s %s (cwd=%s)"), *InLoreBinary, *FullCommand, *WorkingDir);
+		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] {Binary} {Command} (cwd={WorkingDirectory})", InLoreBinary, FullCommand, WorkingDir);
 
 		// Pass the correct working directory.
 		// Lore discovers the repository by walking up for a .lore folder, but running from the correct root makes status/stage/commit/sync more reliable across platforms.
@@ -464,10 +465,10 @@ namespace FLoreSourceControlUtils
 			ParseCommandErrors(OutResults, OutErrorMessages);
 		}
 
-		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] ReturnCode=%d, Stdout:\n%s"), ReturnCode, *Results);
+		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] ReturnCode={ReturnCode}, Stdout:\n{Stdout}", ReturnCode, Results);
 		if (!Errors.IsEmpty())
 		{
-			UE_LOG(LogSourceControl, Warning, TEXT("[Lore] Stderr:\n%s"), *Errors);
+			UE_LOGFMT(LogSourceControl, Warning, "[Lore] Stderr:\n{Stderr}", Errors);
 		}
 
 		return ReturnCode == 0;
