@@ -919,6 +919,108 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
+	void ParseBranchHistoryResults(const TArray<FString>& Results, TArray<FLoreBranchHistoryEntry>& OutHistory)
+	{
+		TOptional<FLoreBranchHistoryEntry> Current;
+
+		auto FlushCurrent = [&Current, &OutHistory]()
+		{
+			if (Current.IsSet())
+			{
+				OutHistory.Add(MoveTemp(Current.GetValue()));
+				Current.Reset();
+			}
+		};
+
+		for (const FString& Line : Results)
+		{
+			TSharedPtr<FJsonObject> JsonObj;
+			if (!ParseJsonLine(Line.TrimStartAndEnd(), JsonObj))
+			{
+				continue;
+			}
+
+			FString TagName;
+			if (!JsonObj->TryGetStringField(TEXT("tagName"), TagName))
+			{
+				continue;
+			}
+
+			const FJsonObject* Data = GetObjectField(*JsonObj, TEXT("data"));
+			if (!Data)
+			{
+				continue;
+			}
+
+			if (TagName == TEXT("revisionHistoryEntry"))
+			{
+				FlushCurrent();
+				Current.Emplace();
+				Data->TryGetStringField(TEXT("revision"), Current->RevisionHash);
+
+				double RevisionNumber = 0.0;
+				if (Data->TryGetNumberField(TEXT("revisionNumber"), RevisionNumber))
+				{
+					Current->RevisionNumber = static_cast<int32>(RevisionNumber);
+				}
+			}
+			else if (TagName == TEXT("metadata") && Current.IsSet())
+			{
+				FString Key;
+				Data->TryGetStringField(TEXT("key"), Key);
+
+				const FJsonObject* Value = GetObjectField(*Data, TEXT("value"));
+				if (!Value)
+				{
+					continue;
+				}
+
+				if (Key == TEXT("message"))
+				{
+					Value->TryGetStringField(TEXT("data"), Current->Description);
+				}
+				else if (Key == TEXT("committed-by") || (Key == TEXT("created-by") && Current->Author.IsEmpty()))
+				{
+					Value->TryGetStringField(TEXT("data"), Current->Author);
+				}
+				else if (Key == TEXT("timestamp"))
+				{
+					double TimestampMs = 0.0;
+					if (Value->TryGetNumberField(TEXT("data"), TimestampMs) && TimestampMs > 0.0)
+					{
+						Current->Date = FDateTime::FromUnixTimestamp(static_cast<int64>(TimestampMs / 1000.0));
+					}
+				}
+			}
+		}
+
+		FlushCurrent();
+	}
+
+	bool RunGetBranchHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FLoreBranchHistoryEntry>& OutHistory, TArray<FString>& OutErrorMessages)
+	{
+		TArray<FString> Params;
+		Params.Add(TEXT("100"));
+		if (!InBranchName.IsEmpty())
+		{
+			Params.Add(FString::Printf(TEXT("--branch=%s"), *QuoteCommandLineArgument(InBranchName)));
+			Params.Add(TEXT("--only-branch"));
+		}
+		Params.Add(TEXT("--local"));
+
+		TArray<FString> Results;
+		const bool bOk = RunLoreCommand(TEXT("revision history"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, OutErrorMessages);
+		ParseBranchHistoryResults(Results, OutHistory);
+
+		// Lore 0.8.x may append an auth-resolution error after a successful local history result
+		// when the server has no auth endpoint. The history itself is complete and usable.
+		if (bOk)
+		{
+			OutErrorMessages.RemoveAll([](const FString& Error) { return Error.Contains(TEXT("authentication requires a configured auth endpoint")); });
+		}
+		return bOk;
+	}
+
 	bool RunSwitchBranch(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FString>& OutErrorMessages, TArray<FString>* OutChangedPaths)
 	{
 		TArray<FString> Params;

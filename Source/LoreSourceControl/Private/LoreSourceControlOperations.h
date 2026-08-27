@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "ILoreSourceControlWorker.h"
+#include "LoreSourceControlUtils.h"
 #include "SourceControlOperationBase.h"
 
 class FLoreSourceControlState;
@@ -24,6 +25,27 @@ class FLoreRefreshBranchesOperation : public FSourceControlOperationBase
 public:
 	virtual FName GetName() const override { return "LoreRefreshBranches"; }
 	virtual FText GetInProgressString() const override { return NSLOCTEXT("LoreSourceControl", "RefreshingBranches", "Refreshing Lore branches..."); }
+};
+
+/** Internal operation used by the branch history tab. */
+class FLoreRefreshBranchHistoryOperation : public FSourceControlOperationBase
+{
+public:
+	explicit FLoreRefreshBranchHistoryOperation(FString InBranchName)
+		: BranchName(MoveTemp(InBranchName))
+	{
+	}
+
+	virtual FName GetName() const override { return "LoreRefreshBranchHistory"; }
+	virtual FText GetInProgressString() const override { return NSLOCTEXT("LoreSourceControl", "RefreshingBranchHistory", "Refreshing Lore branch history..."); }
+
+	const FString& GetBranchName() const { return BranchName; }
+	const TArray<FLoreBranchHistoryEntry>& GetHistory() const { return History; }
+	void SetHistory(TArray<FLoreBranchHistoryEntry>&& InHistory) { History = MoveTemp(InHistory); }
+
+private:
+	FString BranchName;
+	TArray<FLoreBranchHistoryEntry> History;
 };
 
 /** Internal operation for a non-blocking branch switch. */
@@ -179,6 +201,14 @@ public:
 private:
 	TArray<FLoreBranchInfo> Branches;
 	bool bRefreshSucceeded = false;
+};
+
+class FLoreRefreshBranchHistoryWorker : public ILoreSourceControlWorker
+{
+public:
+	virtual FName GetName() const override { return "LoreRefreshBranchHistory"; }
+	virtual bool Execute(FLoreSourceControlCommand& InCommand) override;
+	virtual bool UpdateStates() const override { return false; }
 };
 
 class FLoreSwitchBranchWorker : public ILoreSourceControlWorker

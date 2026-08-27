@@ -263,6 +263,23 @@ bool FLoreCheckInWorker::UpdateStates() const
 {
 	return FLoreSourceControlUtils::UpdateCachedStates(Provider, States, StateScanPaths, bApplyStateResults);
 }
+//-----------------------------------------------------------------------------
+// Branch history
+//-----------------------------------------------------------------------------
+bool FLoreRefreshBranchHistoryWorker::Execute(FLoreSourceControlCommand& InCommand)
+{
+	const TSharedRef<FLoreRefreshBranchHistoryOperation> Operation = StaticCastSharedRef<FLoreRefreshBranchHistoryOperation>(InCommand.Operation);
+
+	TArray<FLoreBranchHistoryEntry> History;
+	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunGetBranchHistory(
+		InCommand.PathToLoreBinary,
+		InCommand.PathToRepositoryRoot,
+		Operation->GetBranchName(),
+		History,
+		InCommand.ErrorMessages);
+	Operation->SetHistory(MoveTemp(History));
+	return InCommand.bCommandSuccessful;
+}
 
 //-----------------------------------------------------------------------------
 // Sync

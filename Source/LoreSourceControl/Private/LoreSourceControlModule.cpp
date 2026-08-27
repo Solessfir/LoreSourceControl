@@ -4,6 +4,7 @@
 #include "LoreSourceControlOperations.h"
 #include "LoreSourceControlProvider.h"
 #include "LoreSourceControlUtils.h"
+#include "SLoreBranchHistory.h"
 #include "Misc/App.h"
 #include "Modules/ModuleManager.h"
 #include "Features/IModularFeatures.h"
@@ -20,7 +21,9 @@
 #include "Logging/MessageLog.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Docking/TabManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -43,6 +46,7 @@
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
 
 #if SOURCE_CONTROL_WITH_SLATE
+static const FName LoreBranchHistoryTabName(TEXT("LoreSourceControl.BranchHistory"));
 static TWeakPtr<SNotificationItem> ShowLoreProgressNotification(const FText& Text)
 {
 	FNotificationInfo Info(Text);
@@ -108,6 +112,7 @@ void FLoreSourceControlModule::StartupModule()
 	LoreSourceControlProvider.RegisterWorker("Unlock", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreUnlockWorker>));
 	LoreSourceControlProvider.RegisterWorker("LorePrintStatus", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLorePrintStatusWorker>));
 	LoreSourceControlProvider.RegisterWorker("LoreRefreshBranches", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreRefreshBranchesWorker>));
+	LoreSourceControlProvider.RegisterWorker("LoreRefreshBranchHistory", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreRefreshBranchHistoryWorker>));
 	LoreSourceControlProvider.RegisterWorker("LoreSwitchBranch", FLoreGetSourceControlWorker::CreateStatic(&CreateLoreWorker<FLoreSwitchBranchWorker>));
 
 	// Load settings (binary path, etc.)
@@ -159,8 +164,7 @@ void FLoreSourceControlModule::StartupModule()
 #if SOURCE_CONTROL_WITH_SLATE
 			if (ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName())
 			{
-				// Same dialog as the toolbar's "Submit Content" - drives our CheckIn worker and pushes when a remote is configured.
-				FSourceControlWindows::ChoosePackagesToCheckIn();
+				OpenLoreCommitDialog();
 			}
 #endif
 		}),
@@ -173,6 +177,19 @@ void FLoreSourceControlModule::StartupModule()
 	if (FSlateApplication::IsInitialized())
 	{
 		FLoreSourceControlCommands::Register();
+		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+			LoreBranchHistoryTabName,
+			FOnSpawnTab::CreateRaw(this, &FLoreSourceControlModule::SpawnBranchHistoryTab))
+			.SetDisplayName(LOCTEXT("LoreBranchHistoryTabTitle", "Branch History"))
+			.SetTooltipText(LOCTEXT("LoreBranchHistoryTabTooltip", "View revisions on the current Lore branch"))
+			.SetIcon(FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), "RevisionControl.ChangelistsTab"))
+			.SetMenuType(ETabSpawnerMenuType::Hidden);
+
+		LoreBranchHistoryCommand = IConsoleManager::Get().RegisterConsoleCommand(
+			TEXT("LoreSourceControl.FocusBranchHistory"),
+			TEXT("Open the Lore branch history tab."),
+			FConsoleCommandDelegate::CreateRaw(this, &FLoreSourceControlModule::ShowBranchHistoryTab),
+			ECVF_Default);
 
 		// The engine's own Revision Control widget registers inside SStatusBar::Construct(), which only runs once the level editor's main tab is built - well after this module loads.
 		// Registering via UToolMenus::RegisterStartupCallback (module load time) would be too early for that widget to exist yet, so wait for the main frame instead.
@@ -220,6 +237,12 @@ void FLoreSourceControlModule::ShutdownModule()
 		LoreCommitCommand = nullptr;
 	}
 
+	if (LoreBranchHistoryCommand)
+	{
+		ConsoleManager.UnregisterConsoleObject(LoreBranchHistoryCommand, false);
+		LoreBranchHistoryCommand = nullptr;
+	}
+
 #if SOURCE_CONTROL_WITH_SLATE
 	if (IMainFrameModule* MainFrameModule = FModuleManager::GetModulePtr<IMainFrameModule>("MainFrame"))
 	{
@@ -231,6 +254,7 @@ void FLoreSourceControlModule::ShutdownModule()
 
 	if (FSlateApplication::IsInitialized())
 	{
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(LoreBranchHistoryTabName);
 		if (const TSharedPtr<SNotificationItem> Notification = SyncNotification.Pin())
 		{
 			Notification->ExpireAndFadeout();
@@ -307,6 +331,7 @@ void FLoreSourceControlModule::RefreshToolbarExtension() const
 {
 	if (UToolMenus* ToolMenus = UToolMenus::TryGet())
 	{
+		ToolMenus->RefreshMenuWidget(TEXT("StatusBar.ToolBar.SourceControl"));
 		for (const FName& MenuName : RegisteredToolbarMenus)
 		{
 			ToolMenus->RefreshMenuWidget(MenuName);
@@ -316,6 +341,7 @@ void FLoreSourceControlModule::RefreshToolbarExtension() const
 
 void FLoreSourceControlModule::RegisterToolbarExtension()
 {
+	RegisterRevisionControlMenuExtension();
 	RegisterToolbarExtensionForMenu(TEXT("LevelEditor.StatusBar.ToolBar"));
 
 	// Asset editors (Blueprint, Material, etc.) don't share the level editor's status bar and have no fixed menu name to register against ahead of time.
@@ -327,6 +353,70 @@ void FLoreSourceControlModule::RegisterToolbarExtension()
 			AssetEditorSubsystem->OnAssetOpenedInEditor().AddRaw(this, &FLoreSourceControlModule::OnAssetEditorOpened);
 		}
 	}
+}
+
+void FLoreSourceControlModule::RegisterRevisionControlMenuExtension()
+{
+	if (bRevisionControlMenuRegistered)
+	{
+		return;
+	}
+
+	FToolMenuOwnerScoped OwnerScoped(this);
+	UToolMenu* Menu = UToolMenus::Get()->ExtendMenu(TEXT("StatusBar.ToolBar.SourceControl"));
+	if (!Menu)
+	{
+		return;
+	}
+
+	bRevisionControlMenuRegistered = true;
+	FToolMenuSection& Section = Menu->FindOrAddSection(TEXT("SourceControlActions"));
+	Section.AddDynamicEntry(TEXT("LoreCommitChanges"), FNewToolMenuSectionDelegate::CreateLambda([this](FToolMenuSection& InSection)
+	{
+		const bool bLoreIsActiveProvider = ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName();
+		if (!bLoreIsActiveProvider || !LoreSourceControlProvider.IsAvailable())
+		{
+			return;
+		}
+
+		InSection.AddMenuEntry(
+			TEXT("LoreCommitChanges"),
+			LOCTEXT("LoreCommitChanges", "View / Commit Changes..."),
+			LOCTEXT("LoreCommitChangesTooltip", "View pending Lore changes and optionally commit and push selected files"),
+			FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), TEXT("RevisionControl.Actions.Submit")),
+			FUIAction(
+				FExecuteAction::CreateRaw(this, &FLoreSourceControlModule::OpenLoreCommitDialog),
+				FCanExecuteAction::CreateRaw(this, &FLoreSourceControlModule::CanOpenLoreCommitDialog)));
+	}));
+}
+
+void FLoreSourceControlModule::OpenLoreCommitDialog() const
+{
+	if (ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName())
+	{
+		FSourceControlWindows::ChoosePackagesToCheckIn();
+	}
+}
+
+bool FLoreSourceControlModule::CanOpenLoreCommitDialog() const
+{
+	return ISourceControlModule::Get().GetProvider().GetName() == LoreSourceControlProvider.GetName()
+		&& LoreSourceControlProvider.IsAvailable()
+		&& FSourceControlWindows::CanChoosePackagesToCheckIn();
+}
+
+TSharedRef<SDockTab> FLoreSourceControlModule::SpawnBranchHistoryTab(const FSpawnTabArgs& InArgs)
+{
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SLoreBranchHistory, &LoreSourceControlProvider)
+		];
+}
+
+void FLoreSourceControlModule::ShowBranchHistoryTab() const
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(FTabId(LoreBranchHistoryTabName));
 }
 
 void FLoreSourceControlModule::OnAssetEditorOpened(UObject* InAsset, IAssetEditorInstance* InInstance)

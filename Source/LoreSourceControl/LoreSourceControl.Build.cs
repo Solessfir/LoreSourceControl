@@ -22,6 +22,7 @@ public class LoreSourceControl : ModuleRules
 				"DesktopWidgets",
 				"DeveloperSettings",
 				"Engine",
+				"InputCore",
 				"Json",
 				"MainFrame",
 				"SourceControl",

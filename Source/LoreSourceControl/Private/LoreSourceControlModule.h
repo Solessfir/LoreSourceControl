@@ -7,8 +7,10 @@
 #include "LoreSourceControlProvider.h"
 
 class SWindow;
+class SDockTab;
 class SNotificationItem;
 class FSlateStyleSet;
+class FSpawnTabArgs;
 struct IConsoleCommand;
 
 class FLoreSourceControlModule : public IModuleInterface
@@ -24,6 +26,8 @@ private:
 #if SOURCE_CONTROL_WITH_SLATE
 	/** Adds the branch switcher combo button to the level editor's Source Control toolbar, and hooks up asset editors to get the same treatment as they open */
 	void RegisterToolbarExtension();
+	/** Adds Lore's View / Commit Changes action to Unreal's bottom Revision Control dropdown. */
+	void RegisterRevisionControlMenuExtension();
 
 	/** Extends a single status-bar toolbar menu with the branch switcher combo button; no-ops if that menu was already extended */
 	void RegisterToolbarExtensionForMenu(FName InMenuName);
@@ -33,6 +37,12 @@ private:
 
 	/** Builds the dropdown menu content listing all local branches (called when the combo button is opened) */
 	TSharedRef<SWidget> GenerateBranchMenu();
+	/** Open the standard submit dialog through Lore. */
+	void OpenLoreCommitDialog() const;
+	bool CanOpenLoreCommitDialog() const;
+	/** Create and focus the dockable branch history tab used by UE6's built-in Lore action. */
+	TSharedRef<SDockTab> SpawnBranchHistoryTab(const FSpawnTabArgs& InArgs);
+	void ShowBranchHistoryTab() const;
 
 	/** Prompts for confirmation, then switches to the given branch (hot-reloading Content, or asking for a restart if Source/Config was touched) */
 	void OnBranchSelected(FString InBranchName);
@@ -76,11 +86,13 @@ private:
 	TWeakPtr<SNotificationItem> SyncNotification;
 	TWeakPtr<SNotificationItem> BranchSwitchNotification;
 	TSharedPtr<FSlateStyleSet> BranchMenuStyle;
+	bool bRevisionControlMenuRegistered = false;
 #endif
 
 	IConsoleCommand* LoreSyncCommand = nullptr;
 	IConsoleCommand* LoreStatusCommand = nullptr;
 	IConsoleCommand* LoreCommitCommand = nullptr;
+	IConsoleCommand* LoreBranchHistoryCommand = nullptr;
 
 	/** The one and only source control provider */
 	FLoreSourceControlProvider LoreSourceControlProvider;

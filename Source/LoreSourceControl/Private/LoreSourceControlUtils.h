@@ -15,6 +15,16 @@ struct LORESOURCECONTROL_API FLoreBranchInfo
 	bool bIsCurrent = false;
 };
 
+/** One repository revision displayed in the branch history tab. */
+struct LORESOURCECONTROL_API FLoreBranchHistoryEntry
+{
+	int32 RevisionNumber = 0;
+	FString RevisionHash;
+	FString Description;
+	FString Author;
+	FDateTime Date;
+};
+
 /** Repository-level facts extracted from one "lore status" run, alongside the per-file states. */
 struct LORESOURCECONTROL_API FLoreStatusSummary
 {
@@ -107,6 +117,9 @@ namespace FLoreSourceControlUtils
 	/** Parse and deduplicate Lore branch-list entries. */
 	LORESOURCECONTROL_API void ParseBranchResults(const TArray<FString>& InResults, TArray<FLoreBranchInfo>& OutBranches);
 
+	/** Parse revision-history entries and their following metadata events. */
+	LORESOURCECONTROL_API void ParseBranchHistoryResults(const TArray<FString>& InResults, TArray<FLoreBranchHistoryEntry>& OutHistory);
+
 	/** Parse lock-query results and optional owner display names. */
 	LORESOURCECONTROL_API void ParseLockResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TMap<FString, FLoreLockOwner>& OutLockedBy);
 
@@ -121,6 +134,9 @@ namespace FLoreSourceControlUtils
 	 * Run `lore branch list` (local branches only) and parse the resulting "branchListEntry" events.
 	 */
 	bool RunGetBranches(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FLoreBranchInfo>& OutBranches, TArray<FString>* OutErrorMessages = nullptr);
+
+	/** Run `lore revision history` for a branch using local repository data. */
+	bool RunGetBranchHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InBranchName, TArray<FLoreBranchHistoryEntry>& OutHistory, TArray<FString>& OutErrorMessages);
 
 	/**
 	 * Run `lore branch switch <name>` to switch the working copy to a different branch.

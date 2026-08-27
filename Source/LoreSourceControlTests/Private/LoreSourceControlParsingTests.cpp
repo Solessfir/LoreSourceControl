@@ -119,6 +119,34 @@ bool FLoreBranchParserTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreBranchHistoryParserTest, "LoreSourceControl.BranchHistory.Parser", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreBranchHistoryParserTest::RunTest(const FString& Parameters)
+{
+	const TArray<FString> Results{
+		TEXT(R"({"tagName":"revisionHistoryEntry","data":{"revision":"abc123","revisionNumber":7}})"),
+		TEXT(R"({"tagName":"metadata","data":{"key":"message","value":{"data":"First change"}}})"),
+		TEXT(R"({"tagName":"metadata","data":{"key":"created-by","value":{"data":"Creator"}}})"),
+		TEXT(R"({"tagName":"metadata","data":{"key":"committed-by","value":{"data":"Committer"}}})"),
+		TEXT(R"({"tagName":"metadata","data":{"key":"timestamp","value":{"data":1700000000000}}})"),
+		TEXT(R"({"tagName":"revisionHistoryEntry","data":{"revision":"def456","revisionNumber":8}})"),
+		TEXT(R"({"tagName":"metadata","data":{"key":"message","value":{"data":"Second change"}}})"),
+		TEXT("not json")
+	};
+
+	TArray<FLoreBranchHistoryEntry> History;
+	FLoreSourceControlUtils::ParseBranchHistoryResults(Results, History);
+
+	TestEqual(TEXT("Branch history count"), History.Num(), 2);
+	TestEqual(TEXT("First revision hash"), History[0].RevisionHash, FString(TEXT("abc123")));
+	TestEqual(TEXT("First revision number"), History[0].RevisionNumber, 7);
+	TestEqual(TEXT("First description"), History[0].Description, FString(TEXT("First change")));
+	TestEqual(TEXT("Committed-by takes precedence"), History[0].Author, FString(TEXT("Committer")));
+	TestEqual(TEXT("First timestamp"), History[0].Date.ToUnixTimestamp(), static_cast<int64>(1700000000));
+	TestEqual(TEXT("Second description"), History[1].Description, FString(TEXT("Second change")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreLockParserTest, "LoreSourceControl.Locks.Parser", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FLoreLockParserTest::RunTest(const FString& Parameters)
