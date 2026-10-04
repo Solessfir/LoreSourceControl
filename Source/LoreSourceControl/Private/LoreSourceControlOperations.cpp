@@ -89,8 +89,9 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	// A query failure is a hard stop: stale cache data must never be treated as permission to submit.
 	if (InCommand.bShouldLockFiles)
 	{
-		TMap<FString, FLoreLockOwner> LockedBy;
-		if (!InCommand.QueryLockStatus(LockedBy, InCommand.ErrorMessages))
+		TLorePathMap<FLoreLockOwner> LockedBy;
+		FString OwnIdentity;
+		if (!InCommand.QueryLockStatus(LockedBy, InCommand.ErrorMessages, &OwnIdentity))
 		{
 			InCommand.ErrorMessages.Add(TEXT("Submit aborted because current lock ownership could not be verified."));
 			return false;
@@ -101,14 +102,14 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 			const FString NormalizedFile = NormalizeComparisonPath(File);
 			for (const TPair<FString, FLoreLockOwner>& Lock : LockedBy)
 			{
-				if (NormalizeComparisonPath(Lock.Key) != NormalizedFile)
+				if (!NormalizeComparisonPath(Lock.Key).Equals(NormalizedFile, LorePathSearchCase))
 				{
 					continue;
 				}
 
 				const bool bOwnLock = Lock.Value.Identity.Equals(TEXT("me"), ESearchCase::IgnoreCase)
 					|| Lock.Value.Identity.Equals(TEXT("self"), ESearchCase::IgnoreCase)
-					|| (!InCommand.Identity.IsEmpty() && Lock.Value.Identity.Equals(InCommand.Identity, ESearchCase::IgnoreCase));
+					|| (!OwnIdentity.IsEmpty() && Lock.Value.Identity.Equals(OwnIdentity, ESearchCase::IgnoreCase));
 				if (!bOwnLock)
 				{
 					const FString LockOwner = Lock.Value.GetDisplayName();
@@ -148,7 +149,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		return false;
 	}
 
-	TSet<FString> SelectedPaths;
+	FLorePathSet SelectedPaths;
 	for (const FString& File : InCommand.Files)
 	{
 		SelectedPaths.Add(NormalizeComparisonPath(File));
@@ -170,7 +171,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 		bool bContainsSelectedPath = SelectedPaths.Contains(NormalizedDirectory);
 		for (const FString& SelectedPath : SelectedPaths)
 		{
-			bContainsSelectedPath |= SelectedPath.StartsWith(DirectoryPrefix);
+			bContainsSelectedPath |= SelectedPath.StartsWith(DirectoryPrefix, LorePathSearchCase);
 		}
 
 		if (!bContainsSelectedPath)
@@ -191,6 +192,7 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// Now commit
 	TArray<FString> CommitParams;
+	CommitParams.Add(TEXT("--"));
 	CommitParams.Add(FLoreSourceControlUtils::QuoteCommandLineArgument(CommitMessage));
 
 	TArray<FString> CommitResults;
@@ -358,7 +360,7 @@ bool FLoreUpdateStatusWorker::Execute(FLoreSourceControlCommand& InCommand)
 			FPaths::NormalizeFilename(NormFile);
 			NormFile.ReplaceInline(TEXT("\\"), TEXT("/"));
 
-			FLoreSourceControlState* State = States.FindByPredicate([&NormFile](const FLoreSourceControlState& S) { return S.LocalFilename == NormFile; });
+			FLoreSourceControlState* State = States.FindByPredicate([&NormFile](const FLoreSourceControlState& S) { return S.LocalFilename.Equals(NormFile, LorePathSearchCase); });
 			if (State)
 			{
 				FLoreSourceControlUtils::RunGetHistory(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, File, InCommand.ErrorMessages, State->History);

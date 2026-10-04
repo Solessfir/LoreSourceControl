@@ -3,10 +3,58 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Misc/Crc.h"
 #include "LoreSourceControlRevision.h"
 
 class FLoreSourceControlState;
 class FLoreSourceControlProvider;
+
+#if PLATFORM_WINDOWS
+inline constexpr ESearchCase::Type LorePathSearchCase = ESearchCase::IgnoreCase;
+#else
+inline constexpr ESearchCase::Type LorePathSearchCase = ESearchCase::CaseSensitive;
+#endif
+
+// FString's default equality and hashing ignore case, including when used as map or set keys.
+template <typename ValueType>
+struct TLorePathMapKeyFuncs : TDefaultMapHashableKeyFuncs<FString, ValueType, false>
+{
+	static bool Matches(const FString& A, const FString& B)
+	{
+		return A.Equals(B, LorePathSearchCase);
+	}
+
+	static uint32 GetKeyHash(const FString& Key)
+	{
+#if PLATFORM_WINDOWS
+		return GetTypeHash(Key);
+#else
+		return FCrc::StrCrc32<TCHAR>(*Key);
+#endif
+	}
+};
+
+struct FLorePathSetKeyFuncs : DefaultKeyFuncs<FString>
+{
+	static bool Matches(const FString& A, const FString& B)
+	{
+		return A.Equals(B, LorePathSearchCase);
+	}
+
+	static uint32 GetKeyHash(const FString& Key)
+	{
+#if PLATFORM_WINDOWS
+		return GetTypeHash(Key);
+#else
+		return FCrc::StrCrc32<TCHAR>(*Key);
+#endif
+	}
+};
+
+template <typename ValueType>
+using TLorePathMap = TMap<FString, ValueType, FDefaultSetAllocator, TLorePathMapKeyFuncs<ValueType>>;
+
+using FLorePathSet = TSet<FString, FLorePathSetKeyFuncs>;
 
 /** One entry from "lore branch list" */
 struct LORESOURCECONTROL_API FLoreBranchInfo
@@ -108,14 +156,15 @@ namespace FLoreSourceControlUtils
 	LORESOURCECONTROL_API void ParseBranchResults(const TArray<FString>& InResults, TArray<FLoreBranchInfo>& OutBranches);
 
 	/** Parse lock-query results and optional owner display names. */
-	LORESOURCECONTROL_API void ParseLockResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TMap<FString, FLoreLockOwner>& OutLockedBy);
+	LORESOURCECONTROL_API void ParseLockResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TLorePathMap<FLoreLockOwner>& OutLockedBy);
+	LORESOURCECONTROL_API bool ParseAuthIdentity(const TArray<FString>& InResults, FString& OutIdentity);
 
 	/**
 	 * Run `lore file history <path>` and parse it into revision history entries, combining each
 	 * "fileHistory" event with the "metadata" events (message/created-by/timestamp) that follow it -
 	 * Lore reports commit message/author/date as separate metadata events, not on the history entry itself.
 	 */
-	bool RunGetHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, TArray<FString>& OutErrorMessages, FLoreSourceControlHistory& OutHistory);
+	LORESOURCECONTROL_API bool RunGetHistory(const FString& InLoreBinary, const FString& InRepositoryRoot, const FString& InFile, TArray<FString>& OutErrorMessages, FLoreSourceControlHistory& OutHistory);
 
 	/**
 	 * Run `lore branch list` (local branches only) and parse the resulting "branchListEntry" events.
@@ -154,7 +203,7 @@ namespace FLoreSourceControlUtils
 	 * Unlike "lock status", this needs no file list - it lists every locked path in one call,
 	 * which is what both a broad refresh and a single-file one actually need.
 	 */
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr);
+	LORESOURCECONTROL_API bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TLorePathMap<FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages = nullptr, FString* OutOwnIdentity = nullptr);
 
 	/** Return every staged file and directory in the repository as normalized absolute paths. */
 	LORESOURCECONTROL_API bool RunGetStagedPaths(const FString& InLoreBinary, const FString& InRepositoryRoot, TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages);

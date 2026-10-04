@@ -6,6 +6,7 @@
 #include "ISourceControlOperation.h"
 #include "ISourceControlProvider.h"
 #include "ILoreSourceControlWorker.h"
+#include "LoreSourceControlUtils.h"
 #include "Misc/IQueuedWork.h"
 
 class FLoreSourceControlProvider;
@@ -23,7 +24,7 @@ public:
 	using FRunLoreCommand = TFunction<bool(const FString&, const TArray<FString>&, const TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
 	using FReadStagedPaths = TFunction<bool(TArray<FString>&, TArray<FString>&, TArray<FString>&)>;
 	using FRefreshStatus = TFunction<bool(const TArray<FString>&, bool, TArray<FString>&, TArray<FLoreSourceControlState>&)>;
-	using FQueryLockStatus = TFunction<bool(TMap<FString, FLoreLockOwner>&, TArray<FString>&)>;
+	using FQueryLockStatus = TFunction<bool(TLorePathMap<FLoreLockOwner>&, TArray<FString>&, FString*)>;
 
 	FLoreSourceControlCommand(const FSourceControlOperationRef& InOperation, const FLoreSourceControlWorkerRef& InWorker)
 		: Operation(InOperation)
@@ -48,7 +49,7 @@ public:
 	bool RunLoreCommand(const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages) const;
 	bool ReadStagedPaths(TArray<FString>& OutStagedFiles, TArray<FString>& OutStagedDirectories, TArray<FString>& OutErrorMessages) const;
 	bool RefreshStatus(const TArray<FString>& InFiles, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates) const;
-	bool QueryLockStatus(TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages) const;
+	bool QueryLockStatus(TLorePathMap<FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages, FString* OutOwnIdentity = nullptr) const;
 
 	/**
 	 * Provider that issued this command, captured on the game thread at Execute() time. Workers

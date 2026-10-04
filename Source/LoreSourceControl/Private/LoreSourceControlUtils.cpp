@@ -9,6 +9,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/FileManager.h"
 #include "UObject/UObjectGlobals.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -23,6 +24,9 @@ namespace FLoreSourceControlUtils
 
 	FString QuoteCommandLineArgument(const FString& InArgument)
 	{
+#if PLATFORM_LINUX
+		return TEXT("'") + InArgument.Replace(TEXT("'"), TEXT("'\"'\"'")) + TEXT("'");
+#else
 		FString Escaped;
 		Escaped.Reserve(InArgument.Len() + 2);
 
@@ -50,6 +54,7 @@ namespace FLoreSourceControlUtils
 
 		Escaped.Append(FString::ChrN(PendingBackslashes * 2, TEXT('\\')));
 		return FString::Printf(TEXT("\"%s\""), *Escaped);
+#endif
 	}
 
 	static bool ParseJsonLine(const FString& InLine, TSharedPtr<FJsonObject>& OutObject)
@@ -415,6 +420,7 @@ namespace FLoreSourceControlUtils
 		int32 ReturnCode = 0;
 		FString Results;
 		FString Errors;
+		const FString WorkingDir = FPaths::ConvertRelativePathToFull(InRepositoryRoot.IsEmpty() ? FPaths::ProjectDir() : InRepositoryRoot);
 
 		// --json provides reliable structured output capture and avoids pager, anstream, and human-text quirks when piping from UE.
 		// Every internal caller needs it to parse events from OutResults.
@@ -428,8 +434,6 @@ namespace FLoreSourceControlUtils
 			FullCommand += Param;
 		}
 
-		const FString WorkingDir = FPaths::ConvertRelativePathToFull(InRepositoryRoot.IsEmpty() ? FPaths::ProjectDir() : InRepositoryRoot);
-
 		// To make a path relative to a *directory* root (not a file), append a dummy leaf so that internal GetPath() in MakePathRelativeTo returns the directory itself.
 		FString RelativeToForMake = WorkingDir;
 		FPaths::NormalizeFilename(RelativeToForMake);
@@ -439,22 +443,35 @@ namespace FLoreSourceControlUtils
 		}
 		RelativeToForMake += TEXT("dummy");
 
+		if (!InFiles.IsEmpty())
+		{
+			FullCommand += TEXT(" --");
+		}
 		for (const FString& File : InFiles)
 		{
 			FString LorePath = File;
 			FPaths::MakePathRelativeTo(LorePath, *RelativeToForMake);
 			FPaths::NormalizeFilename(LorePath);
 			LorePath = LorePath.Replace(TEXT("\\"), TEXT("/"));
-			FullCommand += TEXT(" \"");
-			FullCommand += LorePath;
-			FullCommand += TEXT("\"");
+			FullCommand += TEXT(" ") + QuoteCommandLineArgument(LorePath);
 		}
 
 		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] %s %s (cwd=%s)"), *InLoreBinary, *FullCommand, *WorkingDir);
 
-		// Pass the correct working directory.
-		// Lore discovers the repository by walking up for a .lore folder, but running from the correct root makes status/stage/commit/sync more reliable across platforms.
+#if PLATFORM_LINUX
+		// UE's Unix process API ignores the working directory and cannot preserve arbitrary embedded quotes.
+		const FString ScriptPath = FPaths::CreateTempFilename(TEXT("/tmp/"), TEXT("LoreCommand-"), TEXT(".sh"));
+		const FString Script = TEXT("cd ") + QuoteCommandLineArgument(WorkingDir) + TEXT(" || exit\nexec ") + QuoteCommandLineArgument(InLoreBinary) + TEXT(" ") + FullCommand + TEXT("\n");
+		if (!FFileHelper::SaveStringToFile(Script, *ScriptPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			OutErrorMessages.Add(TEXT("Could not write the temporary Lore command."));
+			return false;
+		}
+		FPlatformProcess::ExecProcess(TEXT("/bin/sh"), *ScriptPath, &ReturnCode, &Results, &Errors);
+		IFileManager::Get().Delete(*ScriptPath);
+#else
 		FPlatformProcess::ExecProcess(*InLoreBinary, *FullCommand, &ReturnCode, &Results, &Errors, *WorkingDir);
+#endif
 
 		Results.ParseIntoArray(OutResults, TEXT("\n"), true);
 		Errors.ParseIntoArray(OutErrorMessages, TEXT("\n"), true);
@@ -519,15 +536,12 @@ namespace FLoreSourceControlUtils
 		// Also query locks and merge in.
 		// A locked but unmodified file has no entry in OutStates because locking alone does not change content, so --scan never flags it as dirty.
 		// Synthesize a clean and checked-out state for every unmatched lock so its checkout icon appears.
-		TMap<FString, FLoreLockOwner> LockedBy;
-		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages))
+		TLorePathMap<FLoreLockOwner> LockedBy;
+		FString OwnIdentity;
+		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages, &OwnIdentity))
 		{
 			return false;
 		}
-
-		// "lock query" reports the owner as a raw user ID, and our own ID is the repository's configured identity in .lore/config.toml.
-		// Compare against that identity, with "me" and "self" retained as fallbacks.
-		const FString OwnIdentity = InProvider.GetIdentity();
 
 		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FLoreLockOwner& Owner)
 		{
@@ -587,10 +601,10 @@ namespace FLoreSourceControlUtils
 			bool bConflicted = false;
 		};
 
-		TMap<FString, FParsedFileStatus> FileStatuses;
+		TLorePathMap<FParsedFileStatus> FileStatuses;
 
 		// pathIgnore means Lore intentionally excludes the path; it must not be offered for add.
-		TSet<FString> IgnoredPaths;
+		FLorePathSet IgnoredPaths;
 
 		for (const FString& Line : Lines)
 		{
@@ -946,7 +960,10 @@ namespace FLoreSourceControlUtils
 				FString Path;
 				if (Data && Data->TryGetStringField(TEXT("path"), Path) && !Path.IsEmpty())
 				{
-					OutChangedPaths->AddUnique(Path);
+					if (!OutChangedPaths->ContainsByPredicate([&Path](const FString& Existing) { return Existing.Equals(Path, LorePathSearchCase); }))
+					{
+						OutChangedPaths->Add(Path);
+					}
 				}
 			}
 		}
@@ -988,7 +1005,10 @@ namespace FLoreSourceControlUtils
 				FString Path;
 				if (Change && Change->TryGetStringField(TEXT("path"), Path) && !Path.IsEmpty())
 				{
-					OutChangedPaths.AddUnique(Path);
+					if (!OutChangedPaths.ContainsByPredicate([&Path](const FString& Existing) { return Existing.Equals(Path, LorePathSearchCase); }))
+					{
+						OutChangedPaths.Add(Path);
+					}
 				}
 			};
 
@@ -1057,7 +1077,7 @@ namespace FLoreSourceControlUtils
 		return bOk;
 	}
 
-	void ParseLockResults(const TArray<FString>& Results, const FString& InRepositoryRoot, TMap<FString, FLoreLockOwner>& OutLockedBy)
+	void ParseLockResults(const TArray<FString>& Results, const FString& InRepositoryRoot, TLorePathMap<FLoreLockOwner>& OutLockedBy)
 	{
 		FString RepoAbs = FPaths::ConvertRelativePathToFull(InRepositoryRoot);
 		TMap<FString, FString> OwnerNames;
@@ -1122,7 +1142,69 @@ namespace FLoreSourceControlUtils
 		}
 	}
 
-	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages)
+	static bool IsAnonymousAuthResult(const TArray<FString>& InResults)
+	{
+		for (const FString& Line : InResults)
+		{
+			TSharedPtr<FJsonObject> Event;
+			FString Tag;
+			if (!ParseJsonLine(Line, Event) || !Event->TryGetStringField(TEXT("tagName"), Tag) || Tag != TEXT("complete"))
+			{
+				continue;
+			}
+			const FJsonObject* Data = GetObjectField(*Event, TEXT("data"));
+			const FJsonObject* Error = Data ? GetObjectField(*Data, TEXT("error")) : nullptr;
+			int32 Code = 0;
+			int32 Status = 0;
+			FString Message;
+			if (Data && Data->TryGetNumberField(TEXT("status"), Status) && Status == 9
+				&& Error && Error->TryGetNumberField(TEXT("errorCode"), Code) && Code == 9
+				&& Error->TryGetStringField(TEXT("message"), Message) && Message == TEXT("Operation not supported: authentication requires a configured auth endpoint"))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ParseAuthIdentity(const TArray<FString>& InResults, FString& OutIdentity)
+	{
+		OutIdentity.Reset();
+		if (IsAnonymousAuthResult(InResults))
+		{
+			OutIdentity = TEXT("<unknown>");
+			return true;
+		}
+		FString UserIdentity;
+		bool bSuccessful = false;
+		for (const FString& Line : InResults)
+		{
+			TSharedPtr<FJsonObject> Event;
+			FString Tag;
+			if (!ParseJsonLine(Line, Event) || !Event->TryGetStringField(TEXT("tagName"), Tag))
+			{
+				continue;
+			}
+			const FJsonObject* Data = GetObjectField(*Event, TEXT("data"));
+			if (Data && Tag == TEXT("authUserInfo"))
+			{
+				Data->TryGetStringField(TEXT("id"), UserIdentity);
+			}
+			else if (Data && Tag == TEXT("complete"))
+			{
+				int32 Status = -1;
+				bSuccessful = Data->TryGetNumberField(TEXT("status"), Status) && Status == 0;
+			}
+		}
+		if (bSuccessful && !UserIdentity.IsEmpty())
+		{
+			OutIdentity = MoveTemp(UserIdentity);
+			return true;
+		}
+		return false;
+	}
+
+	bool GetLoreLockStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const FLoreSourceControlProvider& InProvider, TLorePathMap<FLoreLockOwner>& OutLockedBy, TArray<FString>* OutErrorMessages, FString* OutOwnIdentity)
 	{
 		// "lock status" requires exact file paths (no --scan/recursive option), so a directory (as the broad Connect/Sync scan passes) silently matches nothing.
 		// "lock query" filtered by --branch lists every lock on the branch regardless of path - what we actually want either way.
@@ -1137,13 +1219,37 @@ namespace FLoreSourceControlUtils
 		}
 
 		const bool bOk = RunLoreCommand(TEXT("lock query"), InLoreBinary, InRepositoryRoot, Params, TArray<FString>(), Results, Errors);
+		ParseLockResults(Results, InRepositoryRoot, OutLockedBy);
+		if (OutOwnIdentity)
+		{
+			OutOwnIdentity->Reset();
+			if (bOk && IsAnonymousAuthResult(Results))
+			{
+				*OutOwnIdentity = TEXT("<unknown>");
+			}
+			else if (bOk && !OutLockedBy.IsEmpty())
+			{
+				TArray<FString> AuthResults;
+				TArray<FString> AuthErrors;
+				TArray<FString> AuthParams;
+				FString ConfiguredRemoteUrl;
+				FString ConfiguredIdentity;
+				ReadRepositoryConfig(InRepositoryRoot, ConfiguredRemoteUrl, ConfiguredIdentity);
+				if (!ConfiguredIdentity.IsEmpty())
+				{
+					// Without an explicit identity, auth info selects the first cached account rather than the repository's account.
+					AuthParams.Add(TEXT("--identity=") + QuoteCommandLineArgument(ConfiguredIdentity));
+				}
+				RunLoreCommand(TEXT("auth info"), InLoreBinary, InRepositoryRoot, AuthParams, {}, AuthResults, AuthErrors);
+				ParseAuthIdentity(AuthResults, *OutOwnIdentity);
+			}
+		}
 		RemoveOptionalLockQueryErrors(bOk, Errors);
 		if (OutErrorMessages)
 		{
 			OutErrorMessages->Append(Errors);
 		}
 
-		ParseLockResults(Results, InRepositoryRoot, OutLockedBy);
 		return bOk;
 	}
 
@@ -1187,13 +1293,10 @@ namespace FLoreSourceControlUtils
 			FString AbsolutePath = FPaths::Combine(RepoAbs, Path);
 			FPaths::NormalizeFilename(AbsolutePath);
 			AbsolutePath.ReplaceInline(TEXT("\\"), TEXT("/"));
-			if (Type.Equals(TEXT("directory"), ESearchCase::IgnoreCase))
+			TArray<FString>& StagedPaths = Type.Equals(TEXT("directory"), ESearchCase::IgnoreCase) ? OutStagedDirectories : OutStagedFiles;
+			if (!StagedPaths.ContainsByPredicate([&AbsolutePath](const FString& Existing) { return Existing.Equals(AbsolutePath, LorePathSearchCase); }))
 			{
-				OutStagedDirectories.AddUnique(AbsolutePath);
-			}
-			else
-			{
-				OutStagedFiles.AddUnique(AbsolutePath);
+				StagedPaths.Add(AbsolutePath);
 			}
 		}
 

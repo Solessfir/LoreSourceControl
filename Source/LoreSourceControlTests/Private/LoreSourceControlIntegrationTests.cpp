@@ -1,11 +1,17 @@
 // Copyright Solessfir 2026. All Rights Reserved.
 
 #include "LoreSourceControlUtils.h"
+#include "LoreSourceControlCommand.h"
+#include "LoreSourceControlOperations.h"
+#include "LoreSourceControlProvider.h"
+#include "Features/IModularFeatures.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
+#include "SourceControlOperations.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -144,6 +150,185 @@ bool FLoreTemporaryRepositoryIntegrationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Commit clears staged files"), StagedFiles.IsEmpty());
 	TestTrue(TEXT("Commit clears staged directories"), StagedDirectories.IsEmpty());
 	TestTrue(TEXT("Temporary repository is removed"), Repository.Cleanup());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreArgumentRoundTripIntegrationTest, "LoreSourceControl.Integration.ArgumentRoundTrip", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreArgumentRoundTripIntegrationTest::RunTest(const FString& Parameters)
+{
+	const FString LoreBinary = FLoreSourceControlUtils::FindLoreBinaryPath();
+	if (!FLoreSourceControlUtils::CheckLoreAvailability(LoreBinary))
+	{
+		AddError(FString::Printf(TEXT("The argument test requires a working Lore binary. Tried: %s"), *LoreBinary));
+		return false;
+	}
+	FTemporaryLoreRepository Repository;
+	if (!Repository.Create())
+	{
+		AddError(TEXT("Could not create the temporary argument-test directory."));
+		return false;
+	}
+	TArray<FString> Results;
+	TArray<FString> Errors;
+	const TArray<FString> CreateParameters{
+		TEXT("--offline"), TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Lore automation")),
+		TEXT("--repository"), FLoreSourceControlUtils::QuoteCommandLineArgument(Repository.GetRoot()),
+		TEXT("--no-gc"), TEXT("argument-test")
+	};
+	if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("repository create"), LoreBinary, Repository.GetRoot(), CreateParameters, {}, Results, Errors))
+	{
+		AddError(FormatCommandErrors(Errors));
+		return false;
+	}
+	for (const FString& Name : TArray<FString>{ TEXT("-notes.txt"), TEXT("move"), TEXT("merge"), TEXT("space name.txt"), TEXT("literal ' $ ` ; name.txt") })
+	{
+		const FString File = FPaths::Combine(Repository.GetRoot(), Name);
+		TestTrue(FString::Printf(TEXT("Write %s"), *Name), FFileHelper::SaveStringToFile(TEXT("Native argument test\n"), *File));
+		Results.Reset();
+		Errors.Reset();
+		const bool bStaged = FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), LoreBinary, Repository.GetRoot(), { TEXT("--scan"), TEXT("--no-gc") }, { File }, Results, Errors);
+		TestTrue(FString::Printf(TEXT("Stage literal path %s: %s"), *Name, *FormatCommandErrors(Errors)), bStaged);
+	}
+	const FString MessageFile = FPaths::Combine(Repository.GetRoot(), TEXT("Message.txt"));
+	int32 Revision = 0;
+	for (const FString& Message : TArray<FString>{ TEXT("Quotes: \"two words\" and 'apostrophes'"), TEXT("Backslashes: C:\\Lore\\Trailing\\"), TEXT("First line\nSecond line"), TEXT("-leading message"), TEXT("Literal $(printf changed); `printf changed` $HOME") })
+	{
+		TestTrue(TEXT("Write message fixture"), FFileHelper::SaveStringToFile(FString::FromInt(++Revision), *MessageFile));
+		Results.Reset();
+		Errors.Reset();
+		if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), LoreBinary, Repository.GetRoot(), { TEXT("--scan"), TEXT("--no-gc") }, { MessageFile }, Results, Errors))
+		{
+			AddError(FormatCommandErrors(Errors));
+			continue;
+		}
+		Results.Reset();
+		Errors.Reset();
+		if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("commit"), LoreBinary, Repository.GetRoot(), { TEXT("--no-gc"), TEXT("--"), FLoreSourceControlUtils::QuoteCommandLineArgument(Message) }, {}, Results, Errors))
+		{
+			AddError(FString::Printf(TEXT("Commit message %s: %s"), *Message, *FormatCommandErrors(Errors)));
+			continue;
+		}
+		FLoreSourceControlHistory History;
+		Errors.Reset();
+		TestTrue(TEXT("Read committed message history"), FLoreSourceControlUtils::RunGetHistory(LoreBinary, Repository.GetRoot(), MessageFile, Errors, History));
+		if (History.Num() > 0)
+		{
+			TestEqual(TEXT("Commit message round-trips exactly"), History[0]->GetDescription(), Message);
+		}
+		else
+		{
+			AddError(TEXT("Committed message history is empty."));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreRemoteSubmitIntegrationTest, "LoreSourceControl.Integration.RemoteSubmit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreRemoteSubmitIntegrationTest::RunTest(const FString& Parameters)
+{
+	const FString Remote = FPlatformMisc::GetEnvironmentVariable(TEXT("LORE_TEST_REMOTE"));
+	if (Remote.IsEmpty())
+	{
+		AddInfo(TEXT("Set LORE_TEST_REMOTE to a new disposable Lore repository URL to run the remote submit test."));
+		return true;
+	}
+	const FString LoreBinary = FLoreSourceControlUtils::FindLoreBinaryPath();
+	FTemporaryLoreRepository Repository;
+	if (!Repository.Create())
+	{
+		AddError(TEXT("Could not create the temporary remote-test directory."));
+		return false;
+	}
+	auto Run = [&](const FString& Command, const TArray<FString>& Params, const TArray<FString>& Files)
+	{
+		TArray<FString> Results;
+		TArray<FString> Errors;
+		const bool bOk = FLoreSourceControlUtils::RunLoreCommand(Command, LoreBinary, Repository.GetRoot(), Params, Files, Results, Errors);
+		if (!bOk)
+		{
+			AddError(FString::Printf(TEXT("%s: %s"), *Command, *FormatCommandErrors(Errors)));
+		}
+		return bOk;
+	};
+	if (!Run(TEXT("repository create"), { TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Lore automation")), TEXT("--no-gc"), FLoreSourceControlUtils::QuoteCommandLineArgument(Remote) }, {}))
+	{
+		return false;
+	}
+	FLoreSourceControlProvider* Provider = nullptr;
+	for (ISourceControlProvider* Candidate : IModularFeatures::Get().GetModularFeatureImplementations<ISourceControlProvider>(TEXT("SourceControl")))
+	{
+		if (Candidate->GetName() == FName(TEXT("Lore")))
+		{
+			Provider = static_cast<FLoreSourceControlProvider*>(Candidate);
+			break;
+		}
+	}
+	if (!Provider)
+	{
+		AddError(TEXT("The Lore provider is not registered."));
+		return false;
+	}
+	const FString Selected = FPaths::Combine(Repository.GetRoot(), TEXT("Selected.txt"));
+	const FString Extra = FPaths::Combine(Repository.GetRoot(), TEXT("Extra.txt"));
+	if (!FFileHelper::SaveStringToFile(TEXT("Original selected\n"), *Selected)
+		|| !FFileHelper::SaveStringToFile(TEXT("Original extra\n"), *Extra)
+		|| !Run(TEXT("stage"), { TEXT("--scan"), TEXT("--no-gc") }, { Selected, Extra })
+		|| !Run(TEXT("commit"), { TEXT("--no-gc"), TEXT("--"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Remote fixture")) }, {})
+		|| !Run(TEXT("branch push"), { TEXT("--no-gc") }, {})
+		|| !Run(TEXT("lock acquire"), {}, { Selected }))
+	{
+		return false;
+	}
+	TLorePathMap<FLoreLockOwner> Locks;
+	TArray<FString> Errors;
+	FString OwnIdentity;
+	TestTrue(TEXT("Query the native checkout lock"), FLoreSourceControlUtils::GetLoreLockStatus(LoreBinary, Repository.GetRoot(), *Provider, Locks, &Errors, &OwnIdentity));
+	const FLoreLockOwner* OwnLock = Locks.Find(Selected);
+	TestTrue(TEXT("Checkout belongs to the authenticated or explicit anonymous principal"), OwnLock && !OwnIdentity.IsEmpty() && OwnLock->Identity == OwnIdentity);
+	if (!OwnLock || OwnIdentity.IsEmpty() || OwnLock->Identity != OwnIdentity)
+	{
+		return false;
+	}
+	if (!FFileHelper::SaveStringToFile(TEXT("Changed extra\n"), *Extra)
+		|| !FFileHelper::SaveStringToFile(TEXT("Changed selected\n"), *Selected)
+		|| !Run(TEXT("stage"), { TEXT("--scan"), TEXT("--no-gc") }, { Extra }))
+	{
+		return false;
+	}
+	auto Submit = [&]()
+	{
+		const TSharedRef<FCheckIn, ESPMode::ThreadSafe> Operation = MakeShared<FCheckIn>();
+		Operation->SetDescription(FText::FromString(TEXT("Native submit \"quotes\"\nsecond line")));
+		const FLoreSourceControlWorkerRef Worker = MakeShared<FLoreCheckInWorker>();
+		FLoreSourceControlCommand Command(Operation, Worker);
+		Command.Provider = Provider;
+		Command.PathToLoreBinary = LoreBinary;
+		Command.PathToRepositoryRoot = Repository.GetRoot();
+		Command.Identity = TEXT("Lore automation");
+		Command.bHasRemote = true;
+		Command.bShouldLockFiles = true;
+		Command.Files = { Selected };
+		const bool bOk = Worker->Execute(Command);
+		Errors = Command.ErrorMessages;
+		return bOk;
+	};
+	TestFalse(TEXT("Partial submit rejects unrelated staged work"), Submit());
+	TestTrue(TEXT("Partial submit explains the unrelated stage"), Errors.ContainsByPredicate([](const FString& Error) { return Error.Contains(TEXT("stage also contains paths outside")); }));
+	FLoreSourceControlHistory History;
+	Errors.Reset();
+	TestTrue(TEXT("Inspect history after rejected partial submit"), FLoreSourceControlUtils::RunGetHistory(LoreBinary, Repository.GetRoot(), Selected, Errors, History));
+	TestTrue(TEXT("Rejected partial submit creates no revision"), History.Num() == 1 && History[0]->GetDescription() == TEXT("Remote fixture"));
+	if (!Run(TEXT("file unstage"), {}, { Extra }))
+	{
+		return false;
+	}
+	TestTrue(FString::Printf(TEXT("Submit the selected file with its own lock: %s"), *FormatCommandErrors(Errors)), Submit());
+	Errors.Reset();
+	Locks.Reset();
+	TestTrue(TEXT("Query locks after native submit"), FLoreSourceControlUtils::GetLoreLockStatus(LoreBinary, Repository.GetRoot(), *Provider, Locks, &Errors));
+	TestFalse(TEXT("Successful submit releases the checkout lock"), Locks.Contains(Selected));
 	return true;
 }
 

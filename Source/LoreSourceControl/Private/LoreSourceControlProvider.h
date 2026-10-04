@@ -175,7 +175,7 @@ private:
 	TMap<FName, FLoreGetSourceControlWorker> WorkersMap;
 
 	/** Cached states */
-	TMap<FString, FLoreSourceControlState> StateCache;
+	TLorePathMap<FLoreSourceControlState> StateCache;
 
 	/** Delegate for state changes */
 	FSourceControlStateChanged OnSourceControlStateChanged;

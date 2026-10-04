@@ -165,7 +165,7 @@ ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>&
 				FPaths::NormalizeDirectoryName(NormRoot);
 				if (!NormRoot.EndsWith(TEXT("/"))) { NormRoot += TEXT("/"); }
 				NormFile = NormFile.Replace(TEXT("\\"), TEXT("/"));
-				if (NormFile.StartsWith(NormRoot))
+				if (NormFile.StartsWith(NormRoot, LorePathSearchCase))
 				{
 					NewState.bIsSourceControlled = true;
 					NewState.bIsCurrent = true;
@@ -248,7 +248,7 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 			FString NormFile = File;
 			FPaths::NormalizeFilename(NormFile);
 			NormFile.ReplaceInline(TEXT("\\"), TEXT("/"));
-			return !NormFile.StartsWith(NormRoot);
+			return !NormFile.StartsWith(NormRoot, LorePathSearchCase);
 		});
 
 		// Every requested file was outside the repository.
@@ -614,7 +614,7 @@ void FLoreSourceControlProvider::RefreshRepositoryConfig()
 	}
 
 	FScopeLock Lock(&CriticalSection);
-	if (PathToRepositoryRoot == RepositoryRoot)
+	if (PathToRepositoryRoot.Equals(RepositoryRoot, LorePathSearchCase))
 	{
 		RemoteUrl = MoveTemp(NewRemoteUrl);
 		Identity = MoveTemp(NewIdentity);
@@ -754,8 +754,8 @@ void FLoreSourceControlProvider::AddStatesToCache(const TArray<FLoreSourceContro
 
 void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceControlState>& InStates, const TArray<FString>& InScanPaths)
 {
-	TSet<FString> ExactPaths;
-	TArray<FString> DirectoryPrefixes;
+	FLorePathSet ExactPaths;
+	FLorePathSet DirectoryPrefixes;
 
 	for (const FString& ScanPath : InScanPaths)
 	{
@@ -763,12 +763,11 @@ void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceCo
 		FPaths::NormalizeFilename(NormalizedPath);
 		NormalizedPath.ReplaceInline(TEXT("\\"), TEXT("/"));
 		const bool bDirectoryScope = FPaths::DirectoryExists(NormalizedPath);
-		NormalizedPath.ToLowerInline();
 		ExactPaths.Add(NormalizedPath);
 
 		if (bDirectoryScope)
 		{
-			DirectoryPrefixes.AddUnique(NormalizedPath.EndsWith(TEXT("/")) ? NormalizedPath : NormalizedPath + TEXT("/"));
+			DirectoryPrefixes.Add(NormalizedPath.EndsWith(TEXT("/")) ? NormalizedPath : NormalizedPath + TEXT("/"));
 		}
 	}
 
@@ -777,8 +776,7 @@ void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceCo
 	{
 		for (auto It = StateCache.CreateIterator(); It; ++It)
 		{
-			FString CachedPath = It.Key();
-			CachedPath.ToLowerInline();
+			const FString& CachedPath = It.Key();
 
 			if (ExactPaths.Contains(CachedPath))
 			{
@@ -788,7 +786,7 @@ void FLoreSourceControlProvider::ReplaceStatesInCache(const TArray<FLoreSourceCo
 
 			for (const FString& DirectoryPrefix : DirectoryPrefixes)
 			{
-				if (CachedPath.StartsWith(DirectoryPrefix))
+				if (CachedPath.StartsWith(DirectoryPrefix, LorePathSearchCase))
 				{
 					It.RemoveCurrent();
 					break;

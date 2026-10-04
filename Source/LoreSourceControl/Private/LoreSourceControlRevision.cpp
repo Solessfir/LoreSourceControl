@@ -42,9 +42,9 @@ bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type 
 	RelativePath.ReplaceInline(TEXT("\\"), TEXT("/"));
 
 	TArray<FString> Params;
-	Params.Add(FString::Printf(TEXT("--path \"%s\""), *RelativePath));
-	Params.Add(FString::Printf(TEXT("--revision %s"), *RevisionHash));
-	Params.Add(FString::Printf(TEXT("--output \"%s\""), *InOutFilename));
+	Params.Add(TEXT("--path=") + FLoreSourceControlUtils::QuoteCommandLineArgument(RelativePath));
+	Params.Add(TEXT("--revision=") + FLoreSourceControlUtils::QuoteCommandLineArgument(RevisionHash));
+	Params.Add(TEXT("--output=") + FLoreSourceControlUtils::QuoteCommandLineArgument(InOutFilename));
 
 	TArray<FString> Results;
 	TArray<FString> Errors;

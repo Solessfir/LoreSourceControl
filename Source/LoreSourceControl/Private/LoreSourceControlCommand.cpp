@@ -77,11 +77,15 @@ bool FLoreSourceControlCommand::RefreshStatus(const TArray<FString>& InFiles, bo
 	return FLoreSourceControlUtils::RunUpdateStatus(PathToLoreBinary, PathToRepositoryRoot, InFiles, *Provider, bQueryLocks, OutErrorMessages, OutStates);
 }
 
-bool FLoreSourceControlCommand::QueryLockStatus(TMap<FString, FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages) const
+bool FLoreSourceControlCommand::QueryLockStatus(TLorePathMap<FLoreLockOwner>& OutLockedBy, TArray<FString>& OutErrorMessages, FString* OutOwnIdentity) const
 {
 	if (QueryLockStatusOverride)
 	{
-		return QueryLockStatusOverride(OutLockedBy, OutErrorMessages);
+		if (OutOwnIdentity)
+		{
+			*OutOwnIdentity = Identity;
+		}
+		return QueryLockStatusOverride(OutLockedBy, OutErrorMessages, OutOwnIdentity);
 	}
 
 	if (!Provider)
@@ -90,5 +94,5 @@ bool FLoreSourceControlCommand::QueryLockStatus(TMap<FString, FLoreLockOwner>& O
 		return false;
 	}
 
-	return FLoreSourceControlUtils::GetLoreLockStatus(PathToLoreBinary, PathToRepositoryRoot, *Provider, OutLockedBy, &OutErrorMessages);
+	return FLoreSourceControlUtils::GetLoreLockStatus(PathToLoreBinary, PathToRepositoryRoot, *Provider, OutLockedBy, &OutErrorMessages, OutOwnIdentity);
 }

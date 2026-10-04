@@ -19,7 +19,7 @@ namespace
 
 	const FLoreSourceControlState* FindState(const TArray<FLoreSourceControlState>& States, const FString& Filename)
 	{
-		return States.FindByPredicate([&Filename](const FLoreSourceControlState& State) { return State.LocalFilename == Filename; });
+		return States.FindByPredicate([&Filename](const FLoreSourceControlState& State) { return State.LocalFilename.Equals(Filename, LorePathSearchCase); });
 	}
 }
 
@@ -69,6 +69,42 @@ bool FLoreStatusParserTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Clean requested file parsed"), Clean && Clean->bIsSourceControlled && Clean->bIsCurrent);
 	return true;
 }
+
+#if PLATFORM_LINUX
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreCaseSensitivePathParserTest, "LoreSourceControl.Paths.CaseSensitiveParsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreCaseSensitivePathParserTest::RunTest(const FString& Parameters)
+{
+	const FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("LoreSourceControlTests")));
+	const FString UpperFile = MakeTestPath(Root, TEXT("Case.txt"));
+	const FString LowerFile = MakeTestPath(Root, TEXT("case.txt"));
+	const FString Results = FString::Join(TArray<FString>{
+		TEXT(R"({"tagName":"repositoryStatusFile","data":{"path":"Case.txt","action":"keep","type":"file","flagDirty":1,"flagStaged":0}})"),
+		TEXT(R"({"tagName":"repositoryStatusFile","data":{"path":"case.txt","action":"add","type":"file","flagDirty":1,"flagStaged":1}})")
+	}, TEXT("\n"));
+	TArray<FLoreSourceControlState> States;
+	FLoreSourceControlUtils::ParseStatusResults(Results, {}, Root, States);
+	TestEqual(TEXT("Case-distinct status paths remain separate"), States.Num(), 2);
+	const FLoreSourceControlState* Upper = FindState(States, UpperFile);
+	const FLoreSourceControlState* Lower = FindState(States, LowerFile);
+	TestTrue(TEXT("Case.txt retains its modified state"), Upper && Upper->bIsModified && !Upper->bIsStaged);
+	TestTrue(TEXT("case.txt retains its staged add state"), Lower && Lower->bIsAdded && Lower->bIsStaged);
+
+	TLorePathMap<FLoreLockOwner> Locks;
+	FLoreSourceControlUtils::ParseLockResults({
+		TEXT(R"({"tagName":"lockFileQuery","data":{"path":"Case.txt","owner":"user-1"}})"),
+		TEXT(R"({"tagName":"lockFileQuery","data":{"path":"case.txt","owner":"user-2"}})")
+	}, Root, Locks);
+	TestEqual(TEXT("Case-distinct locked paths remain separate"), Locks.Num(), 2);
+	const FLoreLockOwner* UpperLock = Locks.Find(UpperFile);
+	const FLoreLockOwner* LowerLock = Locks.Find(LowerFile);
+	TestTrue(TEXT("Case.txt retains its lock owner"), UpperLock && UpperLock->Identity == TEXT("user-1"));
+	TestTrue(TEXT("case.txt retains its lock owner"), LowerLock && LowerLock->Identity == TEXT("user-2"));
+	return true;
+}
+
+#endif
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreHistoryParserTest, "LoreSourceControl.History.Parser", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
@@ -130,7 +166,7 @@ bool FLoreLockParserTest::RunTest(const FString& Parameters)
 		TEXT(R"({"tagName":"authUserInfo","data":{"id":"user-1","name":"Alice"}})")
 	};
 
-	TMap<FString, FLoreLockOwner> Locks;
+	TLorePathMap<FLoreLockOwner> Locks;
 	FLoreSourceControlUtils::ParseLockResults(Results, RepositoryRoot, Locks);
 
 	const FLoreLockOwner* NamedOwner = Locks.Find(MakeTestPath(RepositoryRoot, TEXT("Content/Owned.uasset")));
@@ -187,6 +223,34 @@ bool FLoreChangedPathClassifierTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Reloadable content path count"), ContentPaths.Num(), 2);
 	TestEqual(TEXT("First content path"), ContentPaths[0], FString(TEXT("Content/Asset.uasset")));
 	TestEqual(TEXT("Second content path"), ContentPaths[1], FString(TEXT("Plugins/Example/Content/Icon.png")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreAuthIdentityParserTest, "LoreSourceControl.Locks.AuthIdentity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreAuthIdentityParserTest::RunTest(const FString& Parameters)
+{
+	FString Identity;
+	TestTrue(TEXT("Explicit no-auth endpoint resolves the anonymous principal"), FLoreSourceControlUtils::ParseAuthIdentity({
+		TEXT(R"({"tagName":"complete","data":{"status":0,"error":{"errorCode":0,"message":""}}})"),
+		TEXT(R"({"tagName":"complete","data":{"status":9,"error":{"errorCode":9,"message":"Operation not supported: authentication requires a configured auth endpoint"}}})")
+	}, Identity));
+	TestEqual(TEXT("Anonymous owner matches Lore's native marker"), Identity, FString(TEXT("<unknown>")));
+	TestTrue(TEXT("Current authenticated user resolves from auth info"), FLoreSourceControlUtils::ParseAuthIdentity({
+		TEXT(R"({"tagName":"authUserInfo","data":{"id":"user-123","name":"Human commit identity"}})"),
+		TEXT(R"({"tagName":"complete","data":{"status":0,"error":{"errorCode":0,"message":""}}})")
+	}, Identity));
+	TestEqual(TEXT("Principal uses the server ID, not its display name"), Identity, FString(TEXT("user-123")));
+	for (const FString& Failure : TArray<FString>{
+		TEXT(R"({"tagName":"complete","data":{"status":9,"error":{"errorCode":9,"message":"Operation not supported: another operation"}}})"),
+		TEXT(R"({"tagName":"complete","data":{"status":1,"error":{"errorCode":1,"message":"Operation not supported: authentication requires a configured auth endpoint"}}})")
+	})
+	{
+		TestFalse(TEXT("Other auth failures do not grant anonymous ownership"), FLoreSourceControlUtils::ParseAuthIdentity({
+			TEXT(R"({"tagName":"authUserInfo","data":{"id":"unconfirmed-user"}})"), Failure
+		}, Identity));
+		TestTrue(TEXT("Failed lookup clears the previous principal"), Identity.IsEmpty());
+	}
 	return true;
 }
 
