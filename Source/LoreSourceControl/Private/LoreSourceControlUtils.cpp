@@ -284,9 +284,9 @@ namespace FLoreSourceControlUtils
 			return false;
 		}
 
-		for (const FString& Line : Lines)
+		for (int32 LineIndex = 0; LineIndex < Lines.Num(); ++LineIndex)
 		{
-			const FString Trimmed = Line.TrimStartAndEnd();
+			const FString Trimmed = Lines[LineIndex].TrimStartAndEnd();
 
 			// remote_url/identity are top-level scalars written before any [table] - stop once we reach one, everything past that is a nested table (e.g. [store]) we don't need here.
 			if (Trimmed.StartsWith(TEXT("[")))
@@ -302,8 +302,72 @@ namespace FLoreSourceControlUtils
 
 			Key = Key.TrimStartAndEnd();
 			Value = Value.TrimStartAndEnd();
-			Value.RemoveFromStart(TEXT("\""));
-			Value.RemoveFromEnd(TEXT("\""));
+			if (Key != TEXT("remote_url") && Key != TEXT("identity"))
+			{
+				continue;
+			}
+
+			const bool bTripleLiteral = Value.StartsWith(TEXT("'''"));
+			const bool bTripleBasic = Value.StartsWith(TEXT("\"\"\""));
+			if (bTripleLiteral || bTripleBasic)
+			{
+				const FString Delimiter = bTripleLiteral ? TEXT("'''") : TEXT("\"\"\"");
+				while (Value.Len() < 6 || !Value.EndsWith(Delimiter))
+				{
+					if (++LineIndex >= Lines.Num())
+					{
+						return false;
+					}
+					Value += TEXT("\n") + Lines[LineIndex];
+				}
+				Value = Value.Mid(3, Value.Len() - 6);
+				Value.RemoveFromStart(TEXT("\n"));
+			}
+
+			if (!bTripleLiteral && !bTripleBasic && Value.Len() >= 2 && Value.StartsWith(TEXT("'")) && Value.EndsWith(TEXT("'")))
+			{
+				Value = Value.Mid(1, Value.Len() - 2);
+			}
+			else if (!bTripleLiteral)
+			{
+				if (bTripleBasic)
+				{
+					// Native triple basic strings allow raw quotes and newlines; retain their JSON-compatible escapes.
+					FString JsonValue = TEXT("\"");
+					for (int32 Index = 0; Index < Value.Len(); ++Index)
+					{
+						const TCHAR Char = Value[Index];
+						if (Char == TEXT('\\') && Index + 1 < Value.Len())
+						{
+							JsonValue.AppendChar(Char);
+							JsonValue.AppendChar(Value[++Index]);
+						}
+						else if (Char == TEXT('"'))
+						{
+							JsonValue += TEXT("\\\"");
+						}
+						else if (Char == TEXT('\n'))
+						{
+							JsonValue += TEXT("\\n");
+						}
+						else if (Char == TEXT('\t'))
+						{
+							JsonValue += TEXT("\\t");
+						}
+						else
+						{
+							JsonValue.AppendChar(Char);
+						}
+					}
+					Value = JsonValue + TEXT("\"");
+				}
+
+				TSharedPtr<FJsonObject> Decoded;
+				if (!ParseJsonLine(TEXT("{\"value\":") + Value + TEXT("}"), Decoded) || !Decoded->TryGetStringField(TEXT("value"), Value))
+				{
+					continue;
+				}
+			}
 
 			if (Key == TEXT("remote_url"))
 			{
@@ -474,7 +538,9 @@ namespace FLoreSourceControlUtils
 #endif
 
 		Results.ParseIntoArray(OutResults, TEXT("\n"), true);
-		Errors.ParseIntoArray(OutErrorMessages, TEXT("\n"), true);
+		TArray<FString> StderrMessages;
+		Errors.ParseIntoArray(StderrMessages, TEXT("\n"), true);
+		OutErrorMessages.Append(StderrMessages);
 
 		if (bUseJson)
 		{
@@ -804,6 +870,12 @@ namespace FLoreSourceControlUtils
 
 				Current = MakeShared<FLoreSourceControlRevision, ESPMode::ThreadSafe>();
 				Current->Filename = InFile;
+				FString HistoricalPath;
+				if (Data->TryGetStringField(TEXT("path"), HistoricalPath) && !HistoricalPath.IsEmpty())
+				{
+					Current->Filename = FPaths::Combine(InRepositoryRoot, HistoricalPath);
+					FPaths::NormalizeFilename(Current->Filename);
+				}
 				Current->PathToLoreBinary = InLoreBinary;
 				Current->PathToRepositoryRoot = InRepositoryRoot;
 

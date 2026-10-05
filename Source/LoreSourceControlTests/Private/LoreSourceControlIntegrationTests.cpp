@@ -100,7 +100,13 @@ bool FLoreTemporaryRepositoryIntegrationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Configured identity is retained"), ConfigContents.Contains(TEXT("Lore automation")));
 
 	const FString TestFile = FPaths::Combine(Repository.GetRoot(), TEXT("Integration.txt"));
-	if (!FFileHelper::SaveStringToFile(TEXT("Temporary Lore integration test\n"), *TestFile))
+	const FString FirstRevisionFile = FPaths::Combine(Repository.GetRoot(), TEXT("First/Same.txt"));
+	const FString SecondRevisionFile = FPaths::Combine(Repository.GetRoot(), TEXT("Second/Same.txt"));
+	if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(FirstRevisionFile), true)
+		|| !IFileManager::Get().MakeDirectory(*FPaths::GetPath(SecondRevisionFile), true)
+		|| !FFileHelper::SaveStringToFile(TEXT("First revision contents\n"), *FirstRevisionFile)
+		|| !FFileHelper::SaveStringToFile(TEXT("Second revision contents\n"), *SecondRevisionFile)
+		|| !FFileHelper::SaveStringToFile(TEXT("Temporary Lore integration test\n"), *TestFile))
 	{
 		AddError(FString::Printf(TEXT("Could not write temporary repository file: %s"), *TestFile));
 		return false;
@@ -109,7 +115,7 @@ bool FLoreTemporaryRepositoryIntegrationTest::RunTest(const FString& Parameters)
 	Results.Reset();
 	Errors.Reset();
 	const TArray<FString> StageParameters{ TEXT("--scan"), TEXT("--no-gc") };
-	if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), LoreBinary, Repository.GetRoot(), StageParameters, TArray<FString>{ TestFile }, Results, Errors))
+	if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), LoreBinary, Repository.GetRoot(), StageParameters, TArray<FString>{ TestFile, FirstRevisionFile, SecondRevisionFile }, Results, Errors))
 	{
 		AddError(FString::Printf(TEXT("Could not stage the temporary repository file:\n%s"), *FormatCommandErrors(Errors)));
 		return false;
@@ -149,6 +155,76 @@ bool FLoreTemporaryRepositoryIntegrationTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Commit clears staged files"), StagedFiles.IsEmpty());
 	TestTrue(TEXT("Commit clears staged directories"), StagedDirectories.IsEmpty());
+	FLoreSourceControlHistory FirstHistory;
+	FLoreSourceControlHistory SecondHistory;
+	TestTrue(TEXT("Read first same-name file history"), FLoreSourceControlUtils::RunGetHistory(LoreBinary, Repository.GetRoot(), FirstRevisionFile, Errors, FirstHistory));
+	TestTrue(TEXT("Read second same-name file history"), FLoreSourceControlUtils::RunGetHistory(LoreBinary, Repository.GetRoot(), SecondRevisionFile, Errors, SecondHistory));
+	if (FirstHistory.IsEmpty() || SecondHistory.IsEmpty())
+	{
+		AddError(TEXT("The same-name revision fixture has no file history."));
+		return false;
+	}
+	FString FirstOutput;
+	FString SecondOutput;
+	TestTrue(TEXT("Retrieve first same-name revision"), FirstHistory[0]->Get(FirstOutput));
+	TestTrue(TEXT("Retrieve second same-name revision"), SecondHistory[0]->Get(SecondOutput));
+	TestNotEqual(TEXT("Same-name files in one revision use different output paths"), FirstOutput, SecondOutput);
+	FString FirstContents;
+	FString SecondContents;
+	TestTrue(TEXT("Read first revision output"), FFileHelper::LoadFileToString(FirstContents, *FirstOutput));
+	TestTrue(TEXT("Read second revision output"), FFileHelper::LoadFileToString(SecondContents, *SecondOutput));
+	TestEqual(TEXT("First revision contains the first file"), FirstContents, FString(TEXT("First revision contents\n")));
+	TestEqual(TEXT("Second revision contains the second file"), SecondContents, FString(TEXT("Second revision contents\n")));
+	TestTrue(TEXT("Retrieve a revision into an existing output path"), SecondHistory[0]->Get(FirstOutput));
+	TestTrue(TEXT("Read the replaced revision output"), FFileHelper::LoadFileToString(FirstContents, *FirstOutput));
+	TestEqual(TEXT("The requested revision replaces existing output contents"), FirstContents, FString(TEXT("Second revision contents\n")));
+	if (!FirstOutput.IsEmpty())
+	{
+		IFileManager::Get().Delete(*FirstOutput);
+	}
+	if (!SecondOutput.IsEmpty() && SecondOutput != FirstOutput)
+	{
+		IFileManager::Get().Delete(*SecondOutput);
+	}
+	const FString RenamedFile = FPaths::Combine(Repository.GetRoot(), TEXT("First/Renamed.txt"));
+	TestTrue(TEXT("Rename the committed file on disk"), IFileManager::Get().Move(*RenamedFile, *FirstRevisionFile));
+	Errors.Reset();
+	TestTrue(TEXT("Stage the renamed file"), FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), LoreBinary, Repository.GetRoot(), StageParameters, { RenamedFile }, Results, Errors));
+	TestTrue(TEXT("Record the native rename"), FLoreSourceControlUtils::RunLoreCommand(TEXT("stage move"), LoreBinary, Repository.GetRoot(), { TEXT("--no-gc") }, { FirstRevisionFile, RenamedFile }, Results, Errors));
+	TestTrue(TEXT("Commit the rename"), FLoreSourceControlUtils::RunLoreCommand(TEXT("commit"), LoreBinary, Repository.GetRoot(), { TEXT("--no-gc"), TEXT("--"), TEXT("Rename") }, {}, Results, Errors));
+	FLoreSourceControlHistory RenamedHistory;
+	TestTrue(TEXT("Read history across the native rename"), FLoreSourceControlUtils::RunGetHistory(LoreBinary, Repository.GetRoot(), RenamedFile, Errors, RenamedHistory));
+	if (RenamedHistory.Num() >= 2)
+	{
+		TestEqual(TEXT("Older history uses the path at that revision"), RenamedHistory.Last()->GetFilename(), FirstRevisionFile);
+		FString HistoricalOutput;
+		TestTrue(TEXT("Retrieve the revision before the rename"), RenamedHistory.Last()->Get(HistoricalOutput));
+		FString HistoricalContents;
+		TestTrue(TEXT("Read the pre-rename revision"), FFileHelper::LoadFileToString(HistoricalContents, *HistoricalOutput));
+		TestEqual(TEXT("Pre-rename revision retains its original contents"), HistoricalContents, FString(TEXT("First revision contents\n")));
+		if (!HistoricalOutput.IsEmpty())
+		{
+			IFileManager::Get().Delete(*HistoricalOutput);
+		}
+	}
+	else
+	{
+		AddError(TEXT("The renamed file has no pre-rename history."));
+	}
+	Errors.Reset();
+	const TArray<FString> MissingRevisionParameters{
+		TEXT("--path=Integration.txt"),
+		TEXT("--revision=missing-review-revision"),
+		TEXT("--output=") + FLoreSourceControlUtils::QuoteCommandLineArgument(FPaths::Combine(Repository.GetRoot(), TEXT("MissingRevision.txt")))
+	};
+	TestFalse(TEXT("Missing revision reports a native command failure"), FLoreSourceControlUtils::RunLoreCommand(TEXT("file write"), LoreBinary, Repository.GetRoot(), MissingRevisionParameters, {}, Results, Errors));
+	TestFalse(TEXT("Native failure provides a diagnostic"), Errors.IsEmpty());
+	const TArray<FString> OriginalErrors = Errors;
+	TestTrue(TEXT("A successful status refresh follows the failure"), FLoreSourceControlUtils::RunLoreCommand(TEXT("status"), LoreBinary, Repository.GetRoot(), {}, {}, Results, Errors));
+	for (const FString& Error : OriginalErrors)
+	{
+		TestTrue(TEXT("Successful refresh preserves the earlier failure diagnostic"), Errors.Contains(Error));
+	}
 	TestTrue(TEXT("Temporary repository is removed"), Repository.Cleanup());
 	return true;
 }
@@ -171,8 +247,9 @@ bool FLoreArgumentRoundTripIntegrationTest::RunTest(const FString& Parameters)
 	}
 	TArray<FString> Results;
 	TArray<FString> Errors;
+	const FString Identity = TEXT("Lore \"automation\" \\ user");
 	const TArray<FString> CreateParameters{
-		TEXT("--offline"), TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Lore automation")),
+		TEXT("--offline"), TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(Identity),
 		TEXT("--repository"), FLoreSourceControlUtils::QuoteCommandLineArgument(Repository.GetRoot()),
 		TEXT("--no-gc"), TEXT("argument-test")
 	};
@@ -181,6 +258,10 @@ bool FLoreArgumentRoundTripIntegrationTest::RunTest(const FString& Parameters)
 		AddError(FormatCommandErrors(Errors));
 		return false;
 	}
+	FString RemoteUrl;
+	FString ConfigIdentity;
+	TestTrue(TEXT("Read the native repository configuration"), FLoreSourceControlUtils::ReadRepositoryConfig(Repository.GetRoot(), RemoteUrl, ConfigIdentity));
+	TestEqual(TEXT("Native literal TOML identity round-trips exactly"), ConfigIdentity, Identity);
 	for (const FString& Name : TArray<FString>{ TEXT("-notes.txt"), TEXT("move"), TEXT("merge"), TEXT("space name.txt"), TEXT("literal ' $ ` ; name.txt") })
 	{
 		const FString File = FPaths::Combine(Repository.GetRoot(), Name);
@@ -221,6 +302,150 @@ bool FLoreArgumentRoundTripIntegrationTest::RunTest(const FString& Parameters)
 			AddError(TEXT("Committed message history is empty."));
 		}
 	}
+	const FString BasicIdentity = TEXT("Lore \"automation\" 'quoted' \\ user");
+	const FString BasicConfig = TEXT("remote_url = \"\"\nidentity = \"Lore \\\"automation\\\" 'quoted' \\\\ user\"\n[store]\nidentity = \"nested\"\n");
+	TestTrue(TEXT("Write escaped basic TOML configuration"), FFileHelper::SaveStringToFile(BasicConfig, *FPaths::Combine(Repository.GetRoot(), TEXT(".lore/config.toml"))));
+	TestTrue(TEXT("Read escaped basic TOML configuration"), FLoreSourceControlUtils::ReadRepositoryConfig(Repository.GetRoot(), RemoteUrl, ConfigIdentity));
+	TestEqual(TEXT("Basic TOML identity decodes quotes and backslashes"), ConfigIdentity, BasicIdentity);
+	TestTrue(TEXT("Offline remote remains empty"), RemoteUrl.IsEmpty());
+	for (const FString& NativeIdentity : TArray<FString>{
+		TEXT("John \"Jack\" O'Brien"),
+		TEXT("Lore \"automation\" 'quoted' \\ user"),
+		TEXT("\nLore\r \"automation\" 'quoted' literal\\n\nsecond line\n\n last line "),
+		TEXT("Lore \"automation\" 'quoted' \\ user literal\\n\nsecond line\n\n last line "),
+		TEXT("John \"Jack\" O'Brien\"\""),
+		TEXT("Lore \"automation\" 'quoted' \\ user''") })
+	{
+		FTemporaryLoreRepository NativeRepository;
+		if (!NativeRepository.Create())
+		{
+			AddError(TEXT("Could not create the native configuration-test directory."));
+			return false;
+		}
+		Errors.Reset();
+		const TArray<FString> NativeCreateParameters{
+			TEXT("--offline"), TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(NativeIdentity),
+			TEXT("--repository"), FLoreSourceControlUtils::QuoteCommandLineArgument(NativeRepository.GetRoot()),
+			TEXT("--no-gc"), TEXT("native-config-test")
+		};
+		if (!FLoreSourceControlUtils::RunLoreCommand(TEXT("repository create"), LoreBinary, NativeRepository.GetRoot(), NativeCreateParameters, {}, Results, Errors))
+		{
+			AddError(FormatCommandErrors(Errors));
+			return false;
+		}
+		TestTrue(TEXT("Read native triple-string configuration"), FLoreSourceControlUtils::ReadRepositoryConfig(NativeRepository.GetRoot(), RemoteUrl, ConfigIdentity));
+		TestEqual(TEXT("Native triple-string identity round-trips exactly"), ConfigIdentity, NativeIdentity);
+		TestTrue(TEXT("Native offline remote remains empty"), RemoteUrl.IsEmpty());
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreDeleteRevertIntegrationTest, "LoreSourceControl.Integration.DeleteRevert", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreDeleteRevertIntegrationTest::RunTest(const FString& Parameters)
+{
+	const FString LoreBinary = FLoreSourceControlUtils::FindLoreBinaryPath();
+	FTemporaryLoreRepository Repository;
+	if (!Repository.Create())
+	{
+		AddError(TEXT("Could not create the temporary delete/revert-test directory."));
+		return false;
+	}
+	FLoreSourceControlProvider* Provider = nullptr;
+	for (ISourceControlProvider* Candidate : IModularFeatures::Get().GetModularFeatureImplementations<ISourceControlProvider>(TEXT("SourceControl")))
+	{
+		if (Candidate->GetName() == FName(TEXT("Lore")))
+		{
+			Provider = static_cast<FLoreSourceControlProvider*>(Candidate);
+			break;
+		}
+	}
+	if (!Provider)
+	{
+		AddError(TEXT("The Lore provider is not registered."));
+		return false;
+	}
+	auto Run = [&](const FString& Command, const TArray<FString>& Params, const TArray<FString>& Files)
+	{
+		TArray<FString> Results;
+		TArray<FString> Errors;
+		const bool bOk = FLoreSourceControlUtils::RunLoreCommand(Command, LoreBinary, Repository.GetRoot(), Params, Files, Results, Errors);
+		if (!bOk)
+		{
+			AddError(FString::Printf(TEXT("%s: %s"), *Command, *FormatCommandErrors(Errors)));
+		}
+		return bOk;
+	};
+	auto RunWorker = [&](const FSourceControlOperationRef& Operation, const FLoreSourceControlWorkerRef& Worker, const FString& File)
+	{
+		FLoreSourceControlCommand Command(Operation, Worker);
+		Command.Provider = Provider;
+		Command.PathToLoreBinary = LoreBinary;
+		Command.PathToRepositoryRoot = Repository.GetRoot();
+		Command.bShouldLockFiles = false;
+		Command.Files = { File };
+		const bool bOk = Worker->Execute(Command);
+		if (!bOk)
+		{
+			AddError(FString::Printf(TEXT("%s: %s"), *Operation->GetName().ToString(), *FormatCommandErrors(Command.ErrorMessages)));
+		}
+		return bOk;
+	};
+	const FString Selected = FPaths::Combine(Repository.GetRoot(), TEXT("Selected.txt"));
+	const FString Extra = FPaths::Combine(Repository.GetRoot(), TEXT("Extra.txt"));
+	const FString Added = FPaths::Combine(Repository.GetRoot(), TEXT("Added.txt"));
+	if (!Run(TEXT("repository create"), { TEXT("--offline"), TEXT("--identity"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Lore automation")), TEXT("--no-gc"), TEXT("delete-revert-test") }, {})
+		|| !FFileHelper::SaveStringToFile(TEXT("Original selected\n"), *Selected)
+		|| !FFileHelper::SaveStringToFile(TEXT("Original extra\n"), *Extra)
+		|| !Run(TEXT("stage"), { TEXT("--scan"), TEXT("--no-gc") }, { Selected, Extra })
+		|| !Run(TEXT("commit"), { TEXT("--no-gc"), TEXT("--"), FLoreSourceControlUtils::QuoteCommandLineArgument(TEXT("Delete/revert fixture")) }, {})
+		|| !FFileHelper::SaveStringToFile(TEXT("Changed selected\n"), *Selected)
+		|| !FFileHelper::SaveStringToFile(TEXT("Changed extra\n"), *Extra)
+		|| !Run(TEXT("stage"), { TEXT("--scan"), TEXT("--no-gc") }, { Selected, Extra }))
+	{
+		return false;
+	}
+	TArray<FString> StagedFiles;
+	TArray<FString> StagedDirectories;
+	TArray<FString> Errors;
+	auto CheckStage = [&](bool bSelectedStaged)
+	{
+		StagedFiles.Reset();
+		StagedDirectories.Reset();
+		Errors.Reset();
+		TestTrue(TEXT("Read stage after operation"), FLoreSourceControlUtils::RunGetStagedPaths(LoreBinary, Repository.GetRoot(), StagedFiles, StagedDirectories, Errors));
+		TestEqual(TEXT("Only the intended selected stage is changed"), StagedFiles.Contains(Selected), bSelectedStaged);
+		TestTrue(TEXT("Unrelated staged file is preserved"), StagedFiles.Contains(Extra));
+	};
+	if (!RunWorker(MakeShared<FRevert>(), MakeShared<FLoreRevertWorker>(), Selected))
+	{
+		return false;
+	}
+	FString Contents;
+	TestTrue(TEXT("Read reverted selected file"), FFileHelper::LoadFileToString(Contents, *Selected));
+	TestEqual(TEXT("Staged modification is restored"), Contents, FString(TEXT("Original selected\n")));
+	CheckStage(false);
+	if (!RunWorker(MakeShared<FDelete>(), MakeShared<FLoreDeleteWorker>(), Selected))
+	{
+		return false;
+	}
+	TestFalse(TEXT("Delete removes an existing tracked file from disk"), FPaths::FileExists(Selected));
+	CheckStage(true);
+	if (!RunWorker(MakeShared<FRevert>(), MakeShared<FLoreRevertWorker>(), Selected))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Revert restores a staged deletion"), FPaths::FileExists(Selected));
+	CheckStage(false);
+	if (!FFileHelper::SaveStringToFile(TEXT("New staged file\n"), *Added)
+		|| !Run(TEXT("stage"), { TEXT("--scan"), TEXT("--no-gc") }, { Added })
+		|| !RunWorker(MakeShared<FDelete>(), MakeShared<FLoreDeleteWorker>(), Added))
+	{
+		return false;
+	}
+	TestFalse(TEXT("Delete removes a staged addition from disk"), FPaths::FileExists(Added));
+	CheckStage(false);
+	TestFalse(TEXT("Deleted addition cannot be committed later"), StagedFiles.Contains(Added));
 	return true;
 }
 

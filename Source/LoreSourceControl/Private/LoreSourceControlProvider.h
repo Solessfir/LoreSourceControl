@@ -18,12 +18,13 @@ enum class ELoreBranchCacheState : uint8
 	Failed
 };
 
-class FLoreSourceControlProvider : public ISourceControlProvider
+class LORESOURCECONTROL_API FLoreSourceControlProvider : public ISourceControlProvider
 {
 public:
 	/* ISourceControlProvider implementation */
 	virtual void Init(bool bForceConnection = true) override;
 	virtual void Close() override;
+	void Close(bool bApplyStates);
 	virtual FText GetStatusText() const override;
 	virtual TMap<EStatus, FString> GetStatus() const override;
 	virtual bool IsEnabled() const override;
@@ -76,8 +77,8 @@ public:
 	void CheckLoreAvailability();
 	bool IsLoreRepositoryFound() const;
 
-	/** Check if current workspace is a lore repository */
-	void CheckRepositoryStatus();
+	/** Discover the Lore repository containing the supplied directory, or the current project. */
+	void CheckRepositoryStatus(const FString& InProjectDirectory = FString());
 
 	/** Reload remote and identity values after Lore has opened the repository. */
 	void RefreshRepositoryConfig();
@@ -182,6 +183,10 @@ private:
 
 	/** Commands queued on the thread pool, awaiting pickup by Tick() */
 	TArray<FLoreSourceControlCommand*> CommandQueue;
+
+	/** Closed providers reject new work until Init; callbacks cannot reopen one during Close. */
+	bool bClosed = false;
+	bool bClosing = false;
 
 	/** Is lore binary available */
 	bool bLoreAvailable = false;

@@ -107,7 +107,7 @@ public:
 };
 
 /** CheckOut (acquire lock) */
-class FLoreCheckOutWorker : public ILoreSourceControlWorker
+class LORESOURCECONTROL_API FLoreCheckOutWorker : public ILoreSourceControlWorker
 {
 public:
 	virtual FName GetName() const override { return "CheckOut"; }
@@ -118,7 +118,7 @@ public:
 };
 
 /** Revert */
-class FLoreRevertWorker : public ILoreSourceControlWorker
+class LORESOURCECONTROL_API FLoreRevertWorker : public ILoreSourceControlWorker
 {
 public:
 	virtual FName GetName() const override { return "Revert"; }
@@ -140,7 +140,7 @@ public:
 };
 
 /** Delete */
-class FLoreDeleteWorker : public ILoreSourceControlWorker
+class LORESOURCECONTROL_API FLoreDeleteWorker : public ILoreSourceControlWorker
 {
 public:
 	virtual FName GetName() const override { return "Delete"; }

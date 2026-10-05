@@ -23,6 +23,15 @@
 
 void FLoreSourceControlProvider::Init(bool bForceConnection)
 {
+	if (bClosing)
+	{
+		return;
+	}
+	{
+		FScopeLock Lock(&CriticalSection);
+		bClosed = false;
+	}
+
 	// Init() can be called more than once (e.g. re-registering the modular feature); avoid re-running the external "lore --version" probe every time.
 	if (!bLoreAvailable)
 	{
@@ -43,28 +52,71 @@ void FLoreSourceControlProvider::Init(bool bForceConnection)
 
 void FLoreSourceControlProvider::Close()
 {
-	// Commands still in flight reference this provider, and Tick() will never see them again after the queue is emptied.
-	// Retract commands that the pool has not started and wait for the rest so none of them outlive us or leak.
-	for (FLoreSourceControlCommand* Command : CommandQueue)
+	Close(!IsEngineExitRequested());
+}
+
+void FLoreSourceControlProvider::Close(bool bApplyStates)
+{
+	if (bClosing)
 	{
-		if (Command->bDispatched && (!GThreadPool || !GThreadPool->RetractQueuedWork(Command)))
+		return;
+	}
+	bClosing = true;
+	{
+		FScopeLock Lock(&CriticalSection);
+		bClosed = true;
+	}
+
+	// Detach the queue before callbacks, which can close the provider or attempt to issue more work.
+	TArray<FLoreSourceControlCommand*> ClosingCommands = MoveTemp(CommandQueue);
+	CommandQueue.Reset();
+	for (FLoreSourceControlCommand* Command : ClosingCommands)
+	{
+		if (!Command->bDispatched || (GThreadPool && GThreadPool->RetractQueuedWork(Command)))
+		{
+			Command->bCancelled = true;
+			FPlatformAtomics::InterlockedExchange(&Command->bExecuteProcessed, 1);
+		}
+		else
 		{
 			while (!Command->bExecuteProcessed)
 			{
 				FPlatformProcess::Sleep(0.01f);
 			}
 		}
-		delete Command;
 	}
-	CommandQueue.Empty();
 
-	StateCache.Empty();
+	if (bApplyStates)
+	{
+		for (FLoreSourceControlCommand* Command : ClosingCommands)
+		{
+			if (!Command->bCancelled)
+			{
+				Command->Worker->UpdateStates();
+			}
+		}
+	}
 
-	bHasChangesToSync = false;
-	bHasChangesToPush = false;
-	BranchName.Empty();
-	CachedBranches.Empty();
-	BranchCacheState = ELoreBranchCacheState::NotLoaded;
+	{
+		FScopeLock Lock(&CriticalSection);
+		StateCache.Empty();
+		bHasChangesToSync = false;
+		bHasChangesToPush = false;
+		BranchName.Empty();
+		CachedBranches.Empty();
+		BranchCacheState = ELoreBranchCacheState::NotLoaded;
+	}
+
+	for (FLoreSourceControlCommand* Command : ClosingCommands)
+	{
+		OutputCommandMessages(*Command);
+		Command->ReturnResults();
+		if (Command->bAutoDelete)
+		{
+			delete Command;
+		}
+	}
+	bClosing = false;
 }
 
 FText FLoreSourceControlProvider::GetStatusText() const
@@ -100,9 +152,9 @@ TMap<ISourceControlProvider::EStatus, FString> FLoreSourceControlProvider::GetSt
 	FScopeLock Lock(&CriticalSection);
 	TMap<EStatus, FString> Result;
 	Result.Add(EStatus::Enabled, TEXT("Yes"));
-	Result.Add(EStatus::Connected, bLoreAvailable && bLoreRepositoryFound ? TEXT("Yes") : TEXT("No"));
+	Result.Add(EStatus::Connected, !bClosed && bLoreAvailable && bLoreRepositoryFound ? TEXT("Yes") : TEXT("No"));
 	Result.Add(EStatus::ScmVersion, LoreVersion.IsEmpty() ? TEXT("lore (Epic)") : FString::Printf(TEXT("lore %s"), *LoreVersion));
-	Result.Add(EStatus::PluginVersion, TEXT("0.1"));
+	Result.Add(EStatus::PluginVersion, TEXT("1.0"));
 	Result.Add(EStatus::WorkspacePath, PathToRepositoryRoot);
 	Result.Add(EStatus::Branch, BranchName);
 	return Result;
@@ -110,13 +162,14 @@ TMap<ISourceControlProvider::EStatus, FString> FLoreSourceControlProvider::GetSt
 
 bool FLoreSourceControlProvider::IsEnabled() const
 {
-	return true; // Provider is enabled when registered
+	FScopeLock Lock(&CriticalSection);
+	return !bClosed;
 }
 
 bool FLoreSourceControlProvider::IsAvailable() const
 {
 	FScopeLock Lock(&CriticalSection);
-	return bLoreAvailable && bLoreRepositoryFound;
+	return !bClosed && bLoreAvailable && bLoreRepositoryFound;
 }
 
 bool FLoreSourceControlProvider::IsLoreBinaryAvailable() const
@@ -134,6 +187,10 @@ const FName& FLoreSourceControlProvider::GetName() const
 ECommandResult::Type FLoreSourceControlProvider::GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
 {
 	TArray<FString> AbsoluteFiles = SourceControlHelpers::AbsoluteFilenames(InFiles);
+	for (FString& File : AbsoluteFiles)
+	{
+		File = FPaths::ConvertRelativePathToFull(File);
+	}
 	ECommandResult::Type UpdateResult = ECommandResult::Succeeded;
 
 	if (InStateCacheUsage == EStateCacheUsage::ForceUpdate)
@@ -224,11 +281,15 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 {
 	if (!IsEnabled())
 	{
-		InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Failed);
-		return ECommandResult::Failed;
+		InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Cancelled);
+		return ECommandResult::Cancelled;
 	}
 
 	TArray<FString> AbsoluteFiles = SourceControlHelpers::AbsoluteFilenames(InFiles);
+	for (FString& File : AbsoluteFiles)
+	{
+		File = FPaths::ConvertRelativePathToFull(File);
+	}
 
 	// Lore cannot query a file outside our repository, such as Engine/Content, and fails the entire batch with "invalid path".
 	// This broke "Submit Content" and similar operations that gather every loaded package regardless of origin.
@@ -238,17 +299,11 @@ ECommandResult::Type FLoreSourceControlProvider::Execute(const FSourceControlOpe
 	{
 		FString NormRoot = RepositoryRoot;
 		FPaths::NormalizeDirectoryName(NormRoot);
-		if (!NormRoot.EndsWith(TEXT("/")))
-		{
-			NormRoot += TEXT("/");
-		}
+		const FString RootPrefix = NormRoot.EndsWith(TEXT("/")) ? NormRoot : NormRoot + TEXT("/");
 
-		AbsoluteFiles.RemoveAll([&NormRoot](const FString& File)
+		AbsoluteFiles.RemoveAll([&NormRoot, &RootPrefix](const FString& File)
 		{
-			FString NormFile = File;
-			FPaths::NormalizeFilename(NormFile);
-			NormFile.ReplaceInline(TEXT("\\"), TEXT("/"));
-			return !NormFile.StartsWith(NormRoot, LorePathSearchCase);
+			return !File.Equals(NormRoot, LorePathSearchCase) && !File.StartsWith(RootPrefix, LorePathSearchCase);
 		});
 
 		// Every requested file was outside the repository.
@@ -569,14 +624,14 @@ bool FLoreSourceControlProvider::IsLoreRepositoryFound() const
 	return bLoreRepositoryFound;
 }
 
-void FLoreSourceControlProvider::CheckRepositoryStatus()
+void FLoreSourceControlProvider::CheckRepositoryStatus(const FString& InProjectDirectory)
 {
 	FScopeLock Lock(&CriticalSection);
 
 	// Filesystem-only (looks for a ".lore" directory) - deliberately never invokes the lore binary here.
 	// Branch name and dirty/behind-remote flags are fetched asynchronously by FLoreConnectWorker so this can never block the calling thread on an external process.
 	FString RepoRoot;
-	if (FLoreSourceControlUtils::FindRootDirectory(FPaths::ProjectDir(), RepoRoot))
+	if (FLoreSourceControlUtils::FindRootDirectory(InProjectDirectory.IsEmpty() ? FPaths::ProjectDir() : InProjectDirectory, RepoRoot))
 	{
 		PathToRepositoryRoot = FPaths::ConvertRelativePathToFull(RepoRoot);
 		FPaths::NormalizeDirectoryName(PathToRepositoryRoot);
@@ -656,10 +711,7 @@ ECommandResult::Type FLoreSourceControlProvider::ExecuteSynchronousCommand(FLore
 		// One more tick to make sure this command is picked up and cleaned out of the queue.
 		Tick();
 
-		if (InCommand.bCommandSuccessful)
-		{
-			Result = ECommandResult::Succeeded;
-		}
+		Result = InCommand.bCancelled ? ECommandResult::Cancelled : InCommand.bCommandSuccessful ? ECommandResult::Succeeded : ECommandResult::Failed;
 	}
 
 	check(!InCommand.bAutoDelete);
@@ -671,6 +723,18 @@ ECommandResult::Type FLoreSourceControlProvider::ExecuteSynchronousCommand(FLore
 
 ECommandResult::Type FLoreSourceControlProvider::IssueCommand(FLoreSourceControlCommand& InCommand)
 {
+	if (!IsEnabled())
+	{
+		InCommand.bCancelled = true;
+		FPlatformAtomics::InterlockedExchange(&InCommand.bExecuteProcessed, 1);
+		const ECommandResult::Type Result = InCommand.ReturnResults();
+		if (InCommand.bAutoDelete)
+		{
+			delete &InCommand;
+		}
+		return Result;
+	}
+
 	if (GThreadPool)
 	{
 		CommandQueue.Add(&InCommand);

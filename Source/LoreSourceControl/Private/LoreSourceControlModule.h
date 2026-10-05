@@ -73,6 +73,7 @@ private:
 	TSet<FName> RegisteredToolbarMenus;
 	bool bSyncInProgress = false;
 	bool bBranchSwitchInProgress = false;
+	bool bShuttingDown = false;
 	TWeakPtr<SNotificationItem> SyncNotification;
 	TWeakPtr<SNotificationItem> BranchSwitchNotification;
 	TSharedPtr<FSlateStyleSet> BranchMenuStyle;

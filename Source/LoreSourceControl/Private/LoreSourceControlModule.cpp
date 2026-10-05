@@ -201,6 +201,11 @@ void FLoreSourceControlModule::StartupModule()
 
 void FLoreSourceControlModule::ShutdownModule()
 {
+#if SOURCE_CONTROL_WITH_SLATE
+	bShuttingDown = true;
+#endif
+	LoreSourceControlProvider.Close(false);
+
 	IConsoleManager& ConsoleManager = IConsoleManager::Get();
 	if (LoreSyncCommand)
 	{
@@ -260,9 +265,6 @@ void FLoreSourceControlModule::ShutdownModule()
 		FLoreSourceControlCommands::Unregister();
 	}
 #endif
-
-	// Shut down the provider
-	LoreSourceControlProvider.Close();
 
 	// Unbind
 	IModularFeatures::Get().UnregisterModularFeature("SourceControl", &LoreSourceControlProvider);
@@ -556,7 +558,16 @@ void FLoreSourceControlModule::OnBranchSwitchComplete(const FSourceControlOperat
 {
 	const TSharedRef<FLoreSwitchBranchOperation> Operation = StaticCastSharedRef<FLoreSwitchBranchOperation>(InOperation);
 	bBranchSwitchInProgress = false;
+	if (bShuttingDown)
+	{
+		return;
+	}
 	RefreshToolbarExtension();
+	if (InResult == ECommandResult::Cancelled)
+	{
+		CompleteLoreProgressNotification(BranchSwitchNotification, LOCTEXT("SwitchBranchCancelled", "Lore branch switch cancelled."), SNotificationItem::CS_None);
+		return;
+	}
 	if (InResult == ECommandResult::Succeeded)
 	{
 		CompleteLoreProgressNotification(BranchSwitchNotification, FText::Format(LOCTEXT("SwitchBranchSucceeded", "Switched to branch '{0}'."), FText::FromString(Operation->GetBranchName())), SNotificationItem::CS_Success);
@@ -598,6 +609,10 @@ void FLoreSourceControlModule::OnSyncClicked()
 void FLoreSourceControlModule::OnSyncComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult)
 {
 	bSyncInProgress = false;
+	if (bShuttingDown)
+	{
+		return;
+	}
 	RefreshToolbarExtension();
 	if (InResult == ECommandResult::Succeeded)
 	{

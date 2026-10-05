@@ -109,7 +109,7 @@ namespace FLoreSourceControlUtils
 	 * Returns false only if the file could not be read; either output may still be empty
 	 * (e.g. identity is unset until the first commit, or the repo was created fully offline).
 	 */
-	bool ReadRepositoryConfig(const FString& InRepositoryRoot, FString& OutRemoteUrl, FString& OutIdentity);
+	LORESOURCECONTROL_API bool ReadRepositoryConfig(const FString& InRepositoryRoot, FString& OutRemoteUrl, FString& OutIdentity);
 
 	/** Run "lore --version", parse the reported version, and indicate whether it is in the tested range. */
 	LORESOURCECONTROL_API bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion = nullptr, bool* OutTestedVersion = nullptr);

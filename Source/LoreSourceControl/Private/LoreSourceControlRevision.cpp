@@ -16,12 +16,9 @@ bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type 
 	if (InOutFilename.IsEmpty())
 	{
 		IFileManager::Get().MakeDirectory(*FPaths::DiffDir(), true);
-		InOutFilename = FPaths::ConvertRelativePathToFull(FString::Printf(TEXT("%stemp-%s-%s"), *FPaths::DiffDir(), *RevisionHash.Left(12), *FPaths::GetCleanFilename(Filename)));
-	}
-
-	if (FPaths::FileExists(InOutFilename))
-	{
-		return true;
+		const FString Prefix = FString::Printf(TEXT("%s-Rev-%s-"), *FPaths::GetBaseFilename(Filename), *RevisionHash.Left(12));
+		const FString Extension = FPaths::GetExtension(Filename, true);
+		InOutFilename = FPaths::ConvertRelativePathToFull(FPaths::CreateTempFilename(*FPaths::DiffDir(), *Prefix, *Extension));
 	}
 
 	// Relativize Filename to the repository root the same way RunLoreCommand does for its own file arguments, since --path here needs a lore-relative path, not an absolute one.
@@ -42,6 +39,7 @@ bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type 
 	RelativePath.ReplaceInline(TEXT("\\"), TEXT("/"));
 
 	TArray<FString> Params;
+	Params.Add(TEXT("--force"));
 	Params.Add(TEXT("--path=") + FLoreSourceControlUtils::QuoteCommandLineArgument(RelativePath));
 	Params.Add(TEXT("--revision=") + FLoreSourceControlUtils::QuoteCommandLineArgument(RevisionHash));
 	Params.Add(TEXT("--output=") + FLoreSourceControlUtils::QuoteCommandLineArgument(InOutFilename));

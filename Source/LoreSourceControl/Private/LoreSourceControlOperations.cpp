@@ -232,7 +232,13 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
-		InCommand.RunLoreCommand(TEXT("lock release"), TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
+		const bool bUnlocked = InCommand.RunLoreCommand(TEXT("lock release"), {}, InCommand.Files, UnlockResults, UnlockErrors);
+		InCommand.InfoMessages.Append(UnlockResults);
+		InCommand.ErrorMessages.Append(UnlockErrors);
+		if (!bUnlocked)
+		{
+			InCommand.ErrorMessages.Add(TEXT("Committed and pushed successfully, but failed to release checkout locks. Use Unlock to release the remaining locks."));
+		}
 	}
 
 	// Refresh states for the files
@@ -387,7 +393,7 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 	{
 		TArray<FString> Errors;
 		TArray<FString> Results;
-		InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunLoreCommand(TEXT("lock acquire"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, {}, InCommand.Files, Results, Errors);
+		InCommand.bCommandSuccessful = InCommand.RunLoreCommand(TEXT("lock acquire"), {}, InCommand.Files, Results, Errors);
 		InCommand.InfoMessages.Append(Results);
 		InCommand.ErrorMessages.Append(Errors);
 	}
@@ -409,20 +415,32 @@ bool FLoreCheckOutWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// Refresh status/locks
 	StateScanPaths = InCommand.Files;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	bApplyStateResults = InCommand.RefreshStatus(InCommand.Files, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 
 	// Optimistically ensure checkout state for the files we successfully locked.
 	// A post-acquire status query can report nothing due to capture, owner, or branch timing, but the acquire return code already confirmed success.
 	if (bShouldLock && InCommand.bCommandSuccessful)
 	{
+		FLorePathSet AcquiredFiles;
+		for (const FString& File : InCommand.Files)
+		{
+			AcquiredFiles.Add(NormalizeComparisonPath(File));
+		}
 		for (FLoreSourceControlState& S : States)
 		{
-			S.bIsCheckedOut = true;
-			S.bIsCheckedOutOther = false;
+			if (AcquiredFiles.Contains(NormalizeComparisonPath(S.LocalFilename)))
+			{
+				S.bIsCheckedOut = true;
+				S.bIsCheckedOutOther = false;
+				S.CheckedOutOther.Reset();
+			}
 		}
 	}
 
-	InCommand.Provider->UpdateCurrentBranchName();
+	if (InCommand.Provider)
+	{
+		InCommand.Provider->UpdateCurrentBranchName();
+	}
 	return InCommand.bCommandSuccessful;
 }
 
@@ -439,7 +457,16 @@ bool FLoreRevertWorker::Execute(FLoreSourceControlCommand& InCommand)
 	TArray<FString> Results;
 	TArray<FString> Errors;
 
-	InCommand.bCommandSuccessful = FLoreSourceControlUtils::RunLoreCommand(TEXT("file reset"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, {}, InCommand.Files, Results, Errors);
+	// Lore refuses to reset staged nodes. Unstage only the selected paths before restoring them.
+	InCommand.bCommandSuccessful = InCommand.RunLoreCommand(TEXT("file unstage"), {}, InCommand.Files, Results, Errors);
+	InCommand.InfoMessages.Append(Results);
+	InCommand.ErrorMessages.Append(Errors);
+	Results.Reset();
+	Errors.Reset();
+	if (InCommand.bCommandSuccessful)
+	{
+		InCommand.bCommandSuccessful = InCommand.RunLoreCommand(TEXT("file reset"), {}, InCommand.Files, Results, Errors);
+	}
 
 	InCommand.InfoMessages.Append(Results);
 	InCommand.ErrorMessages.Append(Errors);
@@ -449,14 +476,17 @@ bool FLoreRevertWorker::Execute(FLoreSourceControlCommand& InCommand)
 	if (InCommand.bCommandSuccessful && InCommand.bShouldLockFiles)
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
-		FLoreSourceControlUtils::RunLoreCommand(TEXT("lock release"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), InCommand.Files, UnlockResults, UnlockErrors);
+		InCommand.RunLoreCommand(TEXT("lock release"), {}, InCommand.Files, UnlockResults, UnlockErrors);
 		InCommand.InfoMessages.Append(UnlockResults);
 		InCommand.ErrorMessages.Append(UnlockErrors);
 	}
 
 	StateScanPaths = InCommand.Files;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
-	InCommand.Provider->UpdateCurrentBranchName();
+	bApplyStateResults = InCommand.RefreshStatus(InCommand.Files, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	if (InCommand.Provider)
+	{
+		InCommand.Provider->UpdateCurrentBranchName();
+	}
 	return InCommand.bCommandSuccessful;
 }
 
@@ -489,48 +519,46 @@ bool FLoreMarkForAddWorker::UpdateStates() const
 //-----------------------------------------------------------------------------
 bool FLoreDeleteWorker::Execute(FLoreSourceControlCommand& InCommand)
 {
-	// A never-committed Add just gets unstaged; a genuinely tracked file gets its deletion staged.
-	TArray<FString> FilesToUnstage;
-	TArray<FString> FilesToStage;
-
-	for (const FString& File : InCommand.Files)
-	{
-		// Runs on a pool thread - read via the provider's lock, not a raw reference to the map.
-		FLoreSourceControlState CachedState(File);
-		if (InCommand.Provider->TryGetStateFromCache(File, CachedState) && CachedState.IsAdded())
-		{
-			// A never-staged add needs no Lore-side delete action.
-			// A staged add must be removed from the stage so a later repository-wide commit cannot resurrect it.
-			if (CachedState.bIsStaged)
-			{
-				FilesToUnstage.Add(File);
-			}
-		}
-		else
-		{
-			FilesToStage.Add(File);
-		}
-	}
-
 	TArray<FString> Results;
 	TArray<FString> Errors;
-	InCommand.bCommandSuccessful = true;
-
-	if (FilesToUnstage.Num() > 0)
-	{
-		InCommand.bCommandSuccessful &= FLoreSourceControlUtils::RunLoreCommand(TEXT("file unstage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), FilesToUnstage, Results, Errors);
-	}
-
-	if (FilesToStage.Num() > 0)
-	{
-		InCommand.bCommandSuccessful &= FLoreSourceControlUtils::RunLoreCommand(TEXT("stage"), InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, TArray<FString>(), FilesToStage, Results, Errors);
-	}
+	// Discard selected staged additions before removing files, so a later commit cannot resurrect them.
+	InCommand.bCommandSuccessful = InCommand.RunLoreCommand(TEXT("file unstage"), {}, InCommand.Files, Results, Errors);
 	InCommand.InfoMessages.Append(Results);
 	InCommand.ErrorMessages.Append(Errors);
 
+	if (InCommand.bCommandSuccessful)
+	{
+		TArray<FString> FilesToStage;
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		for (const FString& File : InCommand.Files)
+		{
+			if (PlatformFile.DirectoryExists(*File)
+				|| (PlatformFile.FileExists(*File) && !PlatformFile.DeleteFile(*File)))
+			{
+				InCommand.ErrorMessages.Add(FString::Printf(TEXT("Could not delete file: %s"), *File));
+				InCommand.bCommandSuccessful = false;
+				continue;
+			}
+			FilesToStage.Add(File);
+		}
+
+		// Lore stages a missing tracked file as a deletion, and ignores a missing untracked file.
+		if (!FilesToStage.IsEmpty())
+		{
+			Results.Reset();
+			Errors.Reset();
+			InCommand.bCommandSuccessful &= InCommand.RunLoreCommand(TEXT("stage"), {}, FilesToStage, Results, Errors);
+			InCommand.InfoMessages.Append(Results);
+			InCommand.ErrorMessages.Append(Errors);
+		}
+	}
+
 	StateScanPaths = InCommand.Files;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, InCommand.Files, *InCommand.Provider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
-	InCommand.Provider->UpdateCurrentBranchName();
+	bApplyStateResults = InCommand.RefreshStatus(InCommand.Files, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	if (InCommand.Provider)
+	{
+		InCommand.Provider->UpdateCurrentBranchName();
+	}
 	return InCommand.bCommandSuccessful;
 }
 

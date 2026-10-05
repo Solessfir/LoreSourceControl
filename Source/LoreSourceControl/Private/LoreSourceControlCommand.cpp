@@ -8,10 +8,11 @@
 
 bool FLoreSourceControlCommand::DoWork()
 {
-	bCommandSuccessful = Worker->Execute(*this);
+	const bool bSucceeded = Worker->Execute(*this);
+	bCommandSuccessful = bSucceeded;
 	FPlatformAtomics::InterlockedExchange(&bExecuteProcessed, 1);
 
-	return bCommandSuccessful;
+	return bSucceeded;
 }
 
 void FLoreSourceControlCommand::DoThreadedWork()
@@ -36,7 +37,7 @@ ECommandResult::Type FLoreSourceControlCommand::ReturnResults()
 		Operation->AddErrorMessge(FText::FromString(Message));
 	}
 
-	const ECommandResult::Type Result = bCommandSuccessful ? ECommandResult::Succeeded : ECommandResult::Failed;
+	const ECommandResult::Type Result = bCancelled ? ECommandResult::Cancelled : bCommandSuccessful ? ECommandResult::Succeeded : ECommandResult::Failed;
 	OperationCompleteDelegate.ExecuteIfBound(Operation, Result);
 	return Result;
 }

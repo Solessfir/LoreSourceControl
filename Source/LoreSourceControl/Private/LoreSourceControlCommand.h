@@ -88,6 +88,9 @@ public:
 	/** Whether the command succeeded */
 	bool bCommandSuccessful;
 
+	/** The provider closed before this command started. */
+	bool bCancelled = false;
+
 	/** Settings snapshot captured on the game thread; UObject settings must not be read by workers. */
 	bool bShouldLockFiles = true;
 

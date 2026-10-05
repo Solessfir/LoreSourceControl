@@ -18,13 +18,14 @@ Unreal Engine plugin implementing `ISourceControlProvider` for [lore](https://gi
 - **Branch Switching** - toolbar dropdown next to the Revision Control icon, with unsaved-work protection, progress feedback, and asset reload or restart handling
 - **File History** - revision browsing, diffing, and "Diff Against Depot"
 - **Status Tracking** - live Content Browser and asset-dialog icons
-- **Revert / Add** - standard source control workflow, fully wired up
+- **Revert / Add / Delete** - restore staged changes, add files, and remove files from disk while staging tracked deletions
 
 On Linux, commands run in the repository directory and preserve quoted,
 multiline commit descriptions and literal filenames, including leading
 hyphens. Paths are case-sensitive on Linux, including scoped refreshes and partial commits.
 Lock ownership uses the server's current user rather than the
 configured commit author, including Epic Lore's anonymous server mode.
+Selected-file submits reject unrelated staged changes. Unstage those changes before submitting only the selected files. If a submit succeeds but releasing its locks fails, the Source Control message log reports the failure so the locks can be released with Unlock.
 
 ## Requirements
 
@@ -75,17 +76,16 @@ Lore does not use a separate `init` command. The offline form above creates the 
 
 ## Automated Tests
 
-Parser tests, Submit worker tests, and a temporary-repository Lore CLI test live in the separate `LoreSourceControlTests` editor module. The integration test uses the configured Lore binary and removes its isolated repository after each run. Run the `LoreSourceControl` test group from Unreal's Session Frontend Automation tab or from the command line:
+Parser, worker, provider lifecycle, and native Lore CLI tests live in the separate `LoreSourceControlTests` editor module. The integration tests use the configured Lore binary and remove their isolated repositories after each run. Run the `LoreSourceControl` test group from Unreal's Session Frontend Automation tab or from the command line:
 
 ```text
-UnrealEditor-Cmd.exe YourProject.uproject -unattended -nullrhi -ExecCmds="Automation RunTests LoreSourceControl; Quit"
+UnrealEditor-Cmd.exe YourProject.uproject -unattended -nullrhi -ExecCmds="Automation RunTests LoreSourceControl" -TestExit="Automation Test Queue Empty"
 ```
 
 On Linux, use the matching engine's `Engine/Binaries/Linux/UnrealEditor-Cmd`
 with the same arguments. The Lore binary can be configured in Project Settings
 or found on `PATH`. Native integration tests cover temporary repositories,
-literal file arguments, and commit descriptions through Unreal's real process
-launcher.
+literal file arguments, commit descriptions, revision downloads, and selected-file delete/revert through Unreal's real process launcher.
 
 Set `LORE_TEST_REMOTE` to a fresh repository URL on a disposable Lore server
 to enable the native remote submit test. It checks checkout ownership,

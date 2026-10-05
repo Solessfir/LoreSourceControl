@@ -8,6 +8,7 @@
 #include "Features/IModularFeatures.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "SourceControlOperations.h"
@@ -48,6 +49,11 @@ namespace
 				if (InCommand == TEXT("branch push") && !bPushSucceeds)
 				{
 					OutErrors.Add(TEXT("Simulated push failure."));
+					return false;
+				}
+				if (InCommand == TEXT("lock release") && !bUnlockSucceeds)
+				{
+					OutErrors.Add(TEXT("Simulated lock release failure."));
 					return false;
 				}
 				return true;
@@ -91,6 +97,7 @@ namespace
 		bool bPushSucceeds = true;
 		bool bStageSucceeds = true;
 		bool bLockQuerySucceeds = true;
+		bool bUnlockSucceeds = true;
 	};
 
 	bool ContainsMessage(const TArray<FString>& Messages, const FString& ExpectedText)
@@ -159,6 +166,21 @@ bool FLorePushFailureWorkerTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Status still refreshes after push failure"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> read staged paths -> commit -> branch push -> refresh status")));
 	TestTrue(TEXT("Local commit recovery is explained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Commit succeeded locally, but push to remote failed")));
 	TestTrue(TEXT("Underlying push error is retained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated push failure")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreUnlockFailureSubmitWorkerTest, "LoreSourceControl.Workers.CheckIn.UnlockFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreUnlockFailureSubmitWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.Command.bHasRemote = true;
+	Fixture.Command.bShouldLockFiles = true;
+	Fixture.bUnlockSucceeds = false;
+	TestTrue(TEXT("A completed commit and push remain successful"), Fixture.Worker->Execute(Fixture.Command));
+	TestEqual(TEXT("Status refresh follows the failed release"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("query locks -> stage -> read staged paths -> commit -> branch push -> lock release -> refresh status")));
+	TestTrue(TEXT("Underlying lock-release error is retained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated lock release failure")));
+	TestTrue(TEXT("Remaining lock recovery is explained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Use Unlock to release the remaining locks")));
 	return true;
 }
 
@@ -260,6 +282,112 @@ bool FLoreStageFailureWorkerTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stage uses filesystem scanning"), FString::Join(Fixture.StageParameters, TEXT(" ")), FString(TEXT("--scan")));
 	TestTrue(TEXT("Lore stage error is retained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("Simulated stage failure")));
 	TestTrue(TEXT("Submit rejection is explained"), ContainsMessage(Fixture.Command.ErrorMessages, TEXT("selected files could not be staged")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreUnstageFailureWorkerTest, "LoreSourceControl.Workers.UnstageFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreUnstageFailureWorkerTest::RunTest(const FString& Parameters)
+{
+	const FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation/LoreSourceControl"), FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	const FString File = FPaths::Combine(Root, TEXT("Selected.txt"));
+	if (!IFileManager::Get().MakeDirectory(*Root, true) || !FFileHelper::SaveStringToFile(TEXT("Preserve selected file\n"), *File))
+	{
+		AddError(TEXT("Could not create the unstage-failure fixture."));
+		IFileManager::Get().DeleteDirectory(*Root, false, true);
+		return false;
+	}
+	for (const bool bDelete : { false, true })
+	{
+		const FSourceControlOperationRef Operation = bDelete
+			? StaticCastSharedRef<ISourceControlOperation>(MakeShared<FDelete>())
+			: StaticCastSharedRef<ISourceControlOperation>(MakeShared<FRevert>());
+		const FLoreSourceControlWorkerRef Worker = bDelete
+			? StaticCastSharedRef<ILoreSourceControlWorker>(MakeShared<FLoreDeleteWorker>())
+			: StaticCastSharedRef<ILoreSourceControlWorker>(MakeShared<FLoreRevertWorker>());
+		FLoreSourceControlCommand Command(Operation, Worker);
+		Command.Files = { File };
+		Command.bShouldLockFiles = false;
+		TArray<FString> Calls;
+		Command.RunLoreCommandOverride = [&Calls](const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrors)
+		{
+			Calls.Add(InCommand);
+			OutErrors.Add(TEXT("Simulated unstage failure."));
+			return false;
+		};
+		Command.RefreshStatusOverride = [&Calls](const TArray<FString>& InFiles, bool bQueryLocks, TArray<FString>& OutErrors, TArray<FLoreSourceControlState>& OutStates)
+		{
+			Calls.Add(TEXT("refresh status"));
+			return true;
+		};
+		TestFalse(TEXT("Unstage failure fails the operation"), Worker->Execute(Command));
+		TestEqual(TEXT("No reset or stage follows an unstage failure"), FString::Join(Calls, TEXT(" -> ")), FString(TEXT("file unstage -> refresh status")));
+		TestTrue(TEXT("Unstage error is retained"), ContainsMessage(Command.ErrorMessages, TEXT("Simulated unstage failure")));
+		FString Contents;
+		TestTrue(TEXT("Unstage failure leaves the selected file readable"), FFileHelper::LoadFileToString(Contents, *File));
+		TestEqual(TEXT("Unstage failure leaves the selected file unchanged"), Contents, FString(TEXT("Preserve selected file\n")));
+	}
+	TestTrue(TEXT("Remove unstage-failure fixture"), IFileManager::Get().DeleteDirectory(*Root, false, true));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreCheckoutScopeWorkerTest, "LoreSourceControl.Workers.CheckOut.SelectedScope", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreCheckoutScopeWorkerTest::RunTest(const FString& Parameters)
+{
+	const FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation/LoreSourceControl"), FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	const FString Selected = FPaths::Combine(Root, TEXT("Selected.txt"));
+	if (!IFileManager::Get().MakeDirectory(*Root, true) || !FFileHelper::SaveStringToFile(TEXT("Checkout fixture\n"), *Selected))
+	{
+		AddError(TEXT("Could not create the checkout-scope fixture."));
+		IFileManager::Get().DeleteDirectory(*Root, false, true);
+		return false;
+	}
+	const TSharedRef<FLoreCheckOutWorker> Worker = MakeShared<FLoreCheckOutWorker>();
+	FLoreSourceControlCommand Command(MakeShared<FCheckOut>(), Worker);
+	Command.Files = { Selected };
+	Command.bShouldLockFiles = true;
+	TArray<FString> Calls;
+	Command.RunLoreCommandOverride = [&Calls](const FString& InCommand, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrors)
+	{
+		Calls.Add(InCommand);
+		return true;
+	};
+	Command.RefreshStatusOverride = [&Calls, &Selected, &Root](const TArray<FString>& InFiles, bool bQueryLocks, TArray<FString>& OutErrors, TArray<FLoreSourceControlState>& OutStates)
+	{
+		Calls.Add(TEXT("refresh status"));
+		FString SelectedStatePath = Selected;
+		FPaths::NormalizeFilename(SelectedStatePath);
+#if PLATFORM_WINDOWS
+		SelectedStatePath.ToLowerInline();
+#endif
+		FLoreSourceControlState SelectedState(SelectedStatePath);
+		SelectedState.bIsCheckedOutOther = true;
+		SelectedState.CheckedOutOther = TEXT("Stale owner");
+		OutStates.Add(SelectedState);
+#if PLATFORM_LINUX
+		FLoreSourceControlState ForeignState(FPaths::Combine(Root, TEXT("selected.txt")));
+#else
+		FLoreSourceControlState ForeignState(FPaths::Combine(Root, TEXT("Foreign.txt")));
+#endif
+		ForeignState.bIsCheckedOutOther = true;
+		ForeignState.CheckedOutOther = TEXT("Another user");
+		OutStates.Add(ForeignState);
+		FLoreSourceControlState OwnState(FPaths::Combine(Root, TEXT("Own.txt")));
+		OwnState.bIsCheckedOut = true;
+		OutStates.Add(OwnState);
+		return true;
+	};
+	TestTrue(TEXT("Selected checkout succeeds"), Worker->Execute(Command));
+	TestEqual(TEXT("Checkout refreshes lock states"), FString::Join(Calls, TEXT(" -> ")), FString(TEXT("lock acquire -> refresh status")));
+	TestTrue(TEXT("Selected acquisition confirms own checkout"), Worker->States[0].bIsCheckedOut);
+	TestFalse(TEXT("Selected acquisition clears stale foreign checkout"), Worker->States[0].bIsCheckedOutOther);
+	TestTrue(TEXT("Selected acquisition clears stale owner display"), Worker->States[0].CheckedOutOther.IsEmpty());
+	TestFalse(TEXT("Unrelated foreign lock does not become owned"), Worker->States[1].bIsCheckedOut);
+	TestTrue(TEXT("Unrelated foreign lock remains foreign"), Worker->States[1].bIsCheckedOutOther);
+	TestEqual(TEXT("Unrelated foreign owner remains visible"), Worker->States[1].CheckedOutOther, FString(TEXT("Another user")));
+	TestTrue(TEXT("Unrelated own lock remains owned"), Worker->States[2].bIsCheckedOut);
+	TestTrue(TEXT("Remove checkout-scope fixture"), IFileManager::Get().DeleteDirectory(*Root, false, true));
 	return true;
 }
 
