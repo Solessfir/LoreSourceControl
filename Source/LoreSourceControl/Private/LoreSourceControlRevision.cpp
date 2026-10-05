@@ -4,13 +4,14 @@
 #include "LoreSourceControlUtils.h"
 #include "ISourceControlModule.h"
 #include "HAL/FileManager.h"
+#include "Logging/StructuredLog.h"
 #include "Misc/Paths.h"
 
 bool FLoreSourceControlRevision::Get(FString& InOutFilename, EConcurrency::Type InConcurrency) const
 {
 	if (InConcurrency != EConcurrency::Synchronous)
 	{
-		UE_LOG(LogSourceControl, Warning, TEXT("FLoreSourceControlRevision::Get only supports EConcurrency::Synchronous."));
+		UE_LOGFMT(LogSourceControl, Warning, "FLoreSourceControlRevision::Get only supports EConcurrency::Synchronous.");
 	}
 
 	if (InOutFilename.IsEmpty())

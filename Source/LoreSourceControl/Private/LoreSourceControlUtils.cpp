@@ -10,6 +10,7 @@
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/FileManager.h"
+#include "Logging/StructuredLog.h"
 #include "UObject/UObjectGlobals.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -520,7 +521,7 @@ namespace FLoreSourceControlUtils
 			FullCommand += TEXT(" ") + QuoteCommandLineArgument(LorePath);
 		}
 
-		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] %s %s (cwd=%s)"), *InLoreBinary, *FullCommand, *WorkingDir);
+		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] {Binary} {Command} (cwd={WorkingDirectory})", InLoreBinary, FullCommand, WorkingDir);
 
 #if PLATFORM_LINUX
 		// UE's Unix process API ignores the working directory and cannot preserve arbitrary embedded quotes.
@@ -547,10 +548,10 @@ namespace FLoreSourceControlUtils
 			ParseCommandErrors(OutResults, OutErrorMessages);
 		}
 
-		UE_LOG(LogSourceControl, Verbose, TEXT("[Lore] ReturnCode=%d, Stdout:\n%s"), ReturnCode, *Results);
+		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] ReturnCode={ReturnCode}, Stdout:\n{Stdout}", ReturnCode, Results);
 		if (!Errors.IsEmpty())
 		{
-			UE_LOG(LogSourceControl, Warning, TEXT("[Lore] Stderr:\n%s"), *Errors);
+			UE_LOGFMT(LogSourceControl, Warning, "[Lore] Stderr:\n{Stderr}", Errors);
 		}
 
 		return ReturnCode == 0;
