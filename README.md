@@ -29,7 +29,7 @@ Selected-file submits reject unrelated staged changes. Unstage those changes bef
 
 ## Requirements
 
-- Lore CLI available, either on your `PATH` or at an explicit path set in Project Settings. Versions outside the compatibility range of 0.8.6 through 0.8.x are allowed with a warning. Native tests also pass against Epic main `95a9a83` (`0.10.1-nightly+local`).
+- Lore CLI available, either on your `PATH` or at an explicit path set in Project Settings.
 - A Lore repository with a `.lore` directory in the Unreal project directory or one of its parents. Configure an identity for commits and a remote URL for sync, push, and locks.
 
 ## Installation

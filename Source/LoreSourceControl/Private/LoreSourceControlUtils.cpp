@@ -127,7 +127,7 @@ namespace FLoreSourceControlUtils
 		return Paths;
 	}
 
-	static bool ParseLoreVersion(const FString& InOutput, FString& OutVersion, int32& OutMajor, int32& OutMinor, int32& OutPatch)
+	static bool ParseLoreVersion(const FString& InOutput, FString& OutVersion)
 	{
 		TArray<FString> Tokens;
 		InOutput.ParseIntoArrayWS(Tokens);
@@ -137,35 +137,11 @@ namespace FLoreSourceControlUtils
 		}
 
 		OutVersion = Tokens[1];
-		FString NumericVersion = OutVersion;
-		int32 SuffixIndex = NumericVersion.Len();
-		const int32 DashIndex = NumericVersion.Find(TEXT("-"));
-		const int32 PlusIndex = NumericVersion.Find(TEXT("+"));
-		if (DashIndex != INDEX_NONE)
-		{
-			SuffixIndex = FMath::Min(SuffixIndex, DashIndex);
-		}
-		if (PlusIndex != INDEX_NONE)
-		{
-			SuffixIndex = FMath::Min(SuffixIndex, PlusIndex);
-		}
-		NumericVersion.LeftInline(SuffixIndex);
-
-		TArray<FString> Parts;
-		NumericVersion.ParseIntoArray(Parts, TEXT("."), false);
-		return Parts.Num() == 3
-			&& LexTryParseString(OutMajor, *Parts[0])
-			&& LexTryParseString(OutMinor, *Parts[1])
-			&& LexTryParseString(OutPatch, *Parts[2]);
+		return !OutVersion.IsEmpty();
 	}
 
-	static bool ProbeLoreVersion(const FString& Candidate, FString& OutVersion, bool* OutTestedVersion = nullptr)
+	static bool ProbeLoreVersion(const FString& Candidate, FString& OutVersion)
 	{
-		if (OutTestedVersion)
-		{
-			*OutTestedVersion = false;
-		}
-
 		if (Candidate.IsEmpty())
 		{
 			return false;
@@ -177,19 +153,7 @@ namespace FLoreSourceControlUtils
 
 		FPlatformProcess::ExecProcess(*Candidate, TEXT("--version"), &ReturnCode, &OutResults, &OutErrors);
 
-		int32 Major = 0;
-		int32 Minor = 0;
-		int32 Patch = 0;
-		if (ReturnCode == 0 && ParseLoreVersion(OutResults, OutVersion, Major, Minor, Patch))
-		{
-			if (OutTestedVersion)
-			{
-				*OutTestedVersion = Major == 0 && Minor == 8 && Patch >= 6;
-			}
-			return true;
-		}
-
-		return false;
+		return ReturnCode == 0 && ParseLoreVersion(OutResults, OutVersion);
 	}
 
 	static bool TryExecuteLoreVersion(const FString& Candidate, FString& OutUsedCommand)
@@ -383,10 +347,10 @@ namespace FLoreSourceControlUtils
 		return true;
 	}
 
-	bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion, bool* OutTestedVersion)
+	bool CheckLoreAvailability(const FString& InLoreBinaryPath, FString* OutVersion)
 	{
 		FString Version;
-		const bool bAvailable = ProbeLoreVersion(InLoreBinaryPath, Version, OutTestedVersion);
+		const bool bAvailable = ProbeLoreVersion(InLoreBinaryPath, Version);
 		if (OutVersion)
 		{
 			*OutVersion = MoveTemp(Version);

@@ -68,7 +68,6 @@ public:
 	/** Get the current lore binary path (from settings or auto detected) */
 	FString GetLoreBinaryPath() const;
 	FString GetLoreVersion() const;
-	bool IsLoreVersionTested() const;
 
 	/** Set lore binary path */
 	bool SetLoreBinaryPath(const FString& InPath);
@@ -199,7 +198,6 @@ private:
 
 	/** Version reported by the selected Lore binary. */
 	FString LoreVersion;
-	bool bLoreVersionTested = false;
 
 	/** Root of current lore repo */
 	FString PathToRepositoryRoot;

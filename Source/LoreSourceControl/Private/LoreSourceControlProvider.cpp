@@ -537,12 +537,6 @@ FString FLoreSourceControlProvider::GetLoreVersion() const
 	return LoreVersion;
 }
 
-bool FLoreSourceControlProvider::IsLoreVersionTested() const
-{
-	FScopeLock Lock(&CriticalSection);
-	return bLoreVersionTested;
-}
-
 bool FLoreSourceControlProvider::SetLoreBinaryPath(const FString& InPath)
 {
 	FScopeLock Lock(&CriticalSection);
@@ -561,18 +555,17 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 
 	FString NewBinaryPath;
 	FString NewLoreVersion;
-	bool bVersionTested = false;
 	bool bAvailable;
 
 	if (!UserPath.IsEmpty())
 	{
 		NewBinaryPath = UserPath;
-		bAvailable = FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion, &bVersionTested);
+		bAvailable = FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion);
 	}
 	else
 	{
 		NewBinaryPath = FLoreSourceControlUtils::FindLoreBinaryPath();
-		bAvailable = !NewBinaryPath.IsEmpty() && FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion, &bVersionTested);
+		bAvailable = !NewBinaryPath.IsEmpty() && FLoreSourceControlUtils::CheckLoreAvailability(NewBinaryPath, &NewLoreVersion);
 
 		// Auto-apply a successfully discovered path so the setting is populated and the user doesn't have to manage "leave empty for auto-detection".
 		if (bAvailable)
@@ -585,7 +578,6 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 		FScopeLock Lock(&CriticalSection);
 		LoreBinaryPath = NewBinaryPath;
 		LoreVersion = NewLoreVersion;
-		bLoreVersionTested = bVersionTested;
 		bLoreAvailable = bAvailable;
 	}
 
@@ -611,10 +603,6 @@ void FLoreSourceControlProvider::CheckLoreAvailability()
 				FText::FromString(DefaultLocationText)
 			)
 		);
-	}
-	else if (!bVersionTested)
-	{
-		FMessageLog("SourceControl").Warning(FText::Format(LOCTEXT("LoreVersionUntested", "Lore {0} has not been tested with this plugin. Continuing because the Lore CLI is available."), FText::FromString(NewLoreVersion)));
 	}
 }
 

@@ -233,7 +233,7 @@ FText SLoreSourceControlSettings::GetLoreVersionText() const
 
 EVisibility SLoreSourceControlSettings::GetWarningVisibility() const
 {
-	return IsLoreBinaryValid() && IsLoreRepositoryValid() && Provider->IsLoreVersionTested() ? EVisibility::Collapsed : EVisibility::Visible;
+	return IsLoreBinaryValid() && IsLoreRepositoryValid() ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
 FText SLoreSourceControlSettings::GetWarningText() const
@@ -244,7 +244,7 @@ FText SLoreSourceControlSettings::GetWarningText() const
 		{
 			return LOCTEXT("LoreRepositoryNotFoundWarning", "Lore is installed, but this project is not inside a Lore repository. A .lore directory must exist in the project directory or one of its parents.");
 		}
-		return FText::Format(LOCTEXT("LoreVersionUntestedWarning", "Lore {0} has not been tested with this plugin. It will remain enabled, but check the Source Control message log if an operation behaves unexpectedly."), FText::FromString(Provider->GetLoreVersion()));
+		return FText::GetEmpty();
 	}
 
 	FString Path = Provider->GetLoreBinaryPath();
