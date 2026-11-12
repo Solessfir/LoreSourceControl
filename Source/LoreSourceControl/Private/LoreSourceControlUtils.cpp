@@ -604,6 +604,7 @@ namespace FLoreSourceControlUtils
 			}
 
 			FLoreSourceControlState State(Pair.Key);
+			State.TimeStamp = FDateTime::Now();
 			State.bIsSourceControlled = true;
 			State.bIsCurrent = true;
 			ApplyLockOwner(State, Pair.Value);
@@ -730,6 +731,7 @@ namespace FLoreSourceControlUtils
 			}
 
 			FLoreSourceControlState State(Pair.Key);
+			State.TimeStamp = FDateTime::Now();
 			State.bIsSourceControlled = true;
 			State.bIsStaged = Parsed.bStaged;
 			State.bIsConflicted = Parsed.bConflicted;
@@ -764,6 +766,7 @@ namespace FLoreSourceControlUtils
 				FromAbs = FromAbs.Replace(TEXT("\\"), TEXT("/"));
 
 				FLoreSourceControlState DeletedState(FromAbs);
+				DeletedState.TimeStamp = FDateTime::Now();
 				DeletedState.bIsSourceControlled = true;
 				DeletedState.bIsDeleted = true;
 				DeletedState.bIsStaged = Parsed.bStaged;
@@ -787,6 +790,7 @@ namespace FLoreSourceControlUtils
 			}
 
 			FLoreSourceControlState State(AbsFile);
+			State.TimeStamp = FDateTime::Now();
 			if (IgnoredPaths.Contains(AbsFile))
 			{
 				State.bIsIgnored = true;
