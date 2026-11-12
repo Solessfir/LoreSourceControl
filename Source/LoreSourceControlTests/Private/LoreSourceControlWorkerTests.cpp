@@ -154,6 +154,30 @@ bool FLoreRemoteSubmitWorkerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Fix M5: "Keep files checked out" in the Submit dialog must keep the locks after a successful
+// submit; today the worker ignores it and releases them.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreKeepCheckedOutWorkerTest, "LoreSourceControl.Workers.CheckIn.KeepCheckedOutKeepsLocks", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreKeepCheckedOutWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.Command.bHasRemote = true;
+	Fixture.Command.bShouldLockFiles = true;
+	Fixture.OwnIdentity = TEXT("Test user");
+	Fixture.Operation->SetKeepCheckedOut(true);
+
+	TestTrue(TEXT("Submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
+	TestFalse(TEXT("No lock release when files are kept checked out"), Fixture.Calls.Contains(TEXT("lock release")));
+
+	FSubmitWorkerFixture Released;
+	Released.Command.bHasRemote = true;
+	Released.Command.bShouldLockFiles = true;
+	Released.OwnIdentity = TEXT("Test user");
+	TestTrue(TEXT("Submit succeeds"), Released.Worker->Execute(Released.Command));
+	TestTrue(TEXT("Locks are released by default"), Released.Calls.Contains(TEXT("lock release")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLorePushFailureWorkerTest, "LoreSourceControl.Workers.CheckIn.PushFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FLorePushFailureWorkerTest::RunTest(const FString& Parameters)
