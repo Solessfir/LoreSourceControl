@@ -1,0 +1,7 @@
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Plugins/
+Config/DefaultEngine.ini
+Config/DefaultInput.ini

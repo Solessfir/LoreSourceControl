@@ -55,7 +55,7 @@ private:
 };
 
 /** Connect / initialize */
-class FLoreConnectWorker : public ILoreSourceControlWorker
+class LORESOURCECONTROL_API FLoreConnectWorker : public ILoreSourceControlWorker
 {
 public:
 	virtual FName GetName() const override { return "Connect"; }

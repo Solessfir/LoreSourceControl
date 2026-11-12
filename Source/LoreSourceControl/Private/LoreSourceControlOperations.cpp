@@ -37,6 +37,20 @@ static FString NormalizeComparisonPath(const FString& InPath)
 	return Result;
 }
 
+namespace
+{
+	// Everything the engine's Submit dialog can offer: content, config and the project file. Scanning less leaves a changed Config file or .uproject
+	// invisible, so Submit stays disabled for it.
+	TArray<FString> ProjectScanPaths()
+	{
+		return {
+			FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+			FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
+			FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()),
+		};
+	}
+}
+
 //-----------------------------------------------------------------------------
 // Connect
 //-----------------------------------------------------------------------------
@@ -48,13 +62,12 @@ bool FLoreConnectWorker::Execute(FLoreSourceControlCommand& InCommand)
 	FLoreSourceControlProvider& LoreProvider = *InCommand.Provider;
 	LoreProvider.UpdateCurrentBranchName();
 
-	// Scan the entire Content tree up front to warm the state cache and immediately show real checkout, lock, and modified icons in the Content Browser.
+	// Scan content, config and the project file up front to warm the state cache and immediately show real checkout, lock, and modified icons in the Content Browser.
 	// Otherwise, per-asset states remain on the provider's generic "unknown file" default until another action queries the exact file.
 	// This is why Revision Control > Refresh previously had to be run after every launch.
-	TArray<FString> ContentDir;
-	ContentDir.Add(FPaths::ProjectContentDir());
-	StateScanPaths = ContentDir;
-	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, ContentDir, LoreProvider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
+	const TArray<FString> ScanPaths = ProjectScanPaths();
+	StateScanPaths = ScanPaths;
+	bApplyStateResults = FLoreSourceControlUtils::RunUpdateStatus(InCommand.PathToLoreBinary, InCommand.PathToRepositoryRoot, ScanPaths, LoreProvider, InCommand.bShouldLockFiles, InCommand.ErrorMessages, States);
 	InCommand.bCommandSuccessful = bApplyStateResults;
 	InCommand.bCommandSuccessful &= LoreProvider.IsAvailable();
 	return InCommand.bCommandSuccessful;
@@ -229,7 +242,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// The change is now committed, so there is nothing left to protect by holding the lock - release it, same as Revert.
 	// Best-effort: a file that was never locked has nothing to release.
-	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles)
+	// "Keep files checked out" in the Submit dialog keeps them.
+	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles && !Operation->GetKeepCheckedOut())
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
 		const bool bUnlocked = InCommand.RunLoreCommand(TEXT("lock release"), {}, InCommand.Files, UnlockResults, UnlockErrors);
@@ -292,8 +306,8 @@ bool FLoreSyncWorker::Execute(FLoreSourceControlCommand& InCommand)
 	TArray<FString> FilesToUpdate = InCommand.Files;
 	if (FilesToUpdate.Num() == 0)
 	{
-		// Update a broad set - project content at least
-		FilesToUpdate.Add(FPaths::ProjectContentDir());
+		// The same scope Connect scans: content, config and the project file.
+		FilesToUpdate = ProjectScanPaths();
 	}
 
 	StateScanPaths = FilesToUpdate;

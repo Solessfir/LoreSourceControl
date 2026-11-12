@@ -115,7 +115,7 @@ bool FLoreLocalSubmitWorkerTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Local submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
 	TestEqual(TEXT("Local submit sequence"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> read staged paths -> commit -> refresh status")));
-#if PLATFORM_LINUX
+#if PLATFORM_LINUX || PLATFORM_MAC
 	TestEqual(TEXT("Commit message is passed to Lore"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- 'Test commit'")));
 #else
 	TestEqual(TEXT("Commit message is passed to Lore"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- \"Test commit\"")));
@@ -133,7 +133,7 @@ bool FLoreLiteralCommitDescriptionWorkerTest::RunTest(const FString& Parameters)
 	Fixture.Operation->SetDescription(FText::FromString(TEXT("-message 'quoted' \"double quoted\"\nsecond line")));
 
 	TestTrue(TEXT("Literal description submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
-#if PLATFORM_LINUX
+#if PLATFORM_LINUX || PLATFORM_MAC
 	TestEqual(TEXT("Description is protected from option parsing and quoted as one argument"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- '-message '\"'\"'quoted'\"'\"' \"double quoted\"\nsecond line'")));
 #else
 	TestEqual(TEXT("Description is protected from option parsing and quoted as one argument"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- \"-message 'quoted' \\\"double quoted\\\"\nsecond line\"")));
@@ -151,6 +151,30 @@ bool FLoreRemoteSubmitWorkerTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Remote submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
 	TestEqual(TEXT("Remote submit sequence"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> read staged paths -> commit -> branch push -> refresh status")));
 	TestEqual(TEXT("Remote success message"), Fixture.Operation->GetSuccessMessage().ToString(), FString(TEXT("Submitted revision \"Test commit\".")));
+	return true;
+}
+
+// Fix M5: "Keep files checked out" in the Submit dialog must keep the locks after a successful
+// submit; today the worker ignores it and releases them.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreKeepCheckedOutWorkerTest, "LoreSourceControl.Workers.CheckIn.KeepCheckedOutKeepsLocks", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FLoreKeepCheckedOutWorkerTest::RunTest(const FString& Parameters)
+{
+	FSubmitWorkerFixture Fixture;
+	Fixture.Command.bHasRemote = true;
+	Fixture.Command.bShouldLockFiles = true;
+	Fixture.OwnIdentity = TEXT("Test user");
+	Fixture.Operation->SetKeepCheckedOut(true);
+
+	TestTrue(TEXT("Submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
+	TestFalse(TEXT("No lock release when files are kept checked out"), Fixture.Calls.Contains(TEXT("lock release")));
+
+	FSubmitWorkerFixture Released;
+	Released.Command.bHasRemote = true;
+	Released.Command.bShouldLockFiles = true;
+	Released.OwnIdentity = TEXT("Test user");
+	TestTrue(TEXT("Submit succeeds"), Released.Worker->Execute(Released.Command));
+	TestTrue(TEXT("Locks are released by default"), Released.Calls.Contains(TEXT("lock release")));
 	return true;
 }
 

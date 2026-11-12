@@ -33,7 +33,9 @@ public:
 	virtual bool CanCheckIn() const override { return bCanCheckIn; }
 	// Must actually be tracked by Lore already, and not already locked.
 	virtual bool CanCheckout() const override { return bIsSourceControlled && !bIsCheckedOut && !bIsCheckedOutOther; }
-	virtual bool IsCheckedOut() const override { return bIsCheckedOut; }
+	// Lore locks are advisory and any file can be edited: a modified file that nobody else has locked is ours to submit.
+	// The engine's Submit dialog keeps checked-out files only, so without this it would silently drop such a file.
+	virtual bool IsCheckedOut() const override { return bIsCheckedOut || (bIsModified && !bIsCheckedOutOther); }
 	virtual bool IsCheckedOutOther(FString* Who) const override;
 	virtual bool IsCheckedOutInOtherBranch(const FString& CurrentBranch = FString()) const override { return false; }
 	virtual bool IsModifiedInOtherBranch(const FString& CurrentBranch = FString()) const override { return false; }
@@ -57,7 +59,9 @@ public:
 
 	// Extra data we track
 	FString LocalFilename;
-	FDateTime TimeStamp = FDateTime::Now();
+	// Old by default: a state not built from a lore answer must not look fresh, or the engine skips refreshing it for five minutes.
+	// States parsed from lore are stamped with the time they were read.
+	FDateTime TimeStamp = FDateTime::MinValue();
 	FString BranchName;
 	FLoreSourceControlHistory History;
 
