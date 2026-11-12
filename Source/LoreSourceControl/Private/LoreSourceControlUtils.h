@@ -135,7 +135,7 @@ namespace FLoreSourceControlUtils
 	 * this can run on a background thread, where looking the provider up via FModuleManager/ISourceControlModule
 	 * has raced the game thread and deadlocked (observed hanging indefinitely on new-asset creation).
 	 */
-	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates);
+	LORESOURCECONTROL_API bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates);
 
 	/**
 	 * Parser for lore status --json output. Populates per-file states and, if OutSummary is given,
