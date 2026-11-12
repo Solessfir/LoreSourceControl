@@ -571,7 +571,8 @@ namespace FLoreSourceControlUtils
 		FString OwnIdentity;
 		if (!GetLoreLockStatus(InLoreBinary, InRepositoryRoot, InProvider, LockedBy, &OutErrorMessages, &OwnIdentity))
 		{
-			return false;
+			// The status itself succeeded: keep it. Lock owners are unknown this time and are reported as an error.
+			return true;
 		}
 
 		auto ApplyLockOwner = [&OwnIdentity](FLoreSourceControlState& State, const FLoreLockOwner& Owner)
