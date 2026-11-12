@@ -194,8 +194,9 @@ bool FLoreEveryFileReachesLoreTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// Fix B1: no lore call may run forever. A read must give up within its time limit (30 s) and
-// say so, instead of freezing the editor.
+// Fix B1: no lore call may run forever. A quick read (lock query) must give up within its time
+// limit (30 s) and say so, instead of freezing the editor. Longer work (a full status scan, a commit,
+// a push) gets longer limits, since it can legitimately take minutes on a large repository.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreHungLoreTimesOutTest, "LoreSourceControl.Process.HungLoreTimesOut", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FLoreHungLoreTimesOutTest::RunTest(const FString& Parameters)
@@ -205,7 +206,7 @@ bool FLoreHungLoreTimesOutTest::RunTest(const FString& Parameters)
 
 	TArray<FString> Results, Errors;
 	const double Start = FPlatformTime::Seconds();
-	const bool bOk = FLoreSourceControlUtils::RunLoreCommand(TEXT("status"), Fake.Binary, Fake.Root, TArray<FString>{ TEXT("--scan") }, TArray<FString>(), Results, Errors);
+	const bool bOk = FLoreSourceControlUtils::RunLoreCommand(TEXT("lock query"), Fake.Binary, Fake.Root, TArray<FString>(), TArray<FString>(), Results, Errors);
 	const double Elapsed = FPlatformTime::Seconds() - Start;
 
 	TestFalse(TEXT("a hung read fails"), bOk);
