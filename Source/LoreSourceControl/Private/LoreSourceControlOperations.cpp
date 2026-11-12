@@ -242,7 +242,8 @@ bool FLoreCheckInWorker::Execute(FLoreSourceControlCommand& InCommand)
 
 	// The change is now committed, so there is nothing left to protect by holding the lock - release it, same as Revert.
 	// Best-effort: a file that was never locked has nothing to release.
-	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles)
+	// "Keep files checked out" in the Submit dialog keeps them.
+	if (InCommand.bCommandSuccessful && InCommand.bHasRemote && bPushed && InCommand.bShouldLockFiles && !Operation->GetKeepCheckedOut())
 	{
 		TArray<FString> UnlockResults, UnlockErrors;
 		const bool bUnlocked = InCommand.RunLoreCommand(TEXT("lock release"), {}, InCommand.Files, UnlockResults, UnlockErrors);
