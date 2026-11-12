@@ -161,11 +161,9 @@ bool FLoreArgumentsReachLoreUnchangedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// Fix H1 (Mac) and H4 (Windows): every selected file must reach lore. On Mac, more than 256
-// arguments crash the engine's process launcher (SIGSEGV in FMacPlatformProcess::CreateProcInternal,
-// measured 2026-11-12); Windows fails past 32,767 characters. A crash probe until fixed:
-//   -ExecCmds="Automation RunTests LoreCrashProbe"
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreEveryFileReachesLoreTest, "LoreCrashProbe.Process.EveryFileReachesLore", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+// Fix H1: every selected file must reach lore. On Mac, more than 256 arguments used to crash the engine's
+// process launcher (SIGSEGV in FMacPlatformProcess::CreateProcInternal, measured 2026-11-12).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreEveryFileReachesLoreTest, "LoreSourceControl.Process.EveryFileReachesLore", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FLoreEveryFileReachesLoreTest::RunTest(const FString& Parameters)
 {

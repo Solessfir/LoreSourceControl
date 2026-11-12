@@ -150,7 +150,8 @@ namespace FLoreSourceControlUtils
 
 	FString QuoteCommandLineArgument(const FString& InArgument)
 	{
-#if PLATFORM_LINUX
+#if PLATFORM_LINUX || PLATFORM_MAC
+		// POSIX single quotes keep every byte. Mac and Linux run lore through a /bin/sh script (see RunLoreCommand), so this is what lore receives.
 		return TEXT("'") + InArgument.Replace(TEXT("'"), TEXT("'\"'\"'")) + TEXT("'");
 #else
 		FString Escaped;
@@ -608,9 +609,12 @@ namespace FLoreSourceControlUtils
 		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] {Binary} {Command} (cwd={WorkingDirectory})", InLoreBinary, FullCommand, WorkingDir);
 		const double Timeout = LoreTimeoutSeconds(InCommand, InParameters);
 
-#if PLATFORM_LINUX
-		// UE's Unix process API ignores the working directory and cannot preserve arbitrary embedded quotes.
-		const FString ScriptPath = FPaths::CreateTempFilename(TEXT("/tmp/"), TEXT("LoreCommand-"), TEXT(".sh"));
+#if PLATFORM_LINUX || PLATFORM_MAC
+		// Run lore through a /bin/sh script, so the engine's launcher only ever sees one argument.
+		// UE's Unix launcher ignores the working directory and cannot preserve arbitrary embedded quotes, and the Mac launcher splits the command line
+		// on spaces without decoding quotes and crashes past 256 arguments (FMacPlatformProcess::CreateProcInternal), so a large file list or a quote
+		// in a commit message could not reach lore intact.
+		const FString ScriptPath = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("LoreCommand-"), TEXT(".sh"));
 		const FString Script = TEXT("cd ") + QuoteCommandLineArgument(WorkingDir) + TEXT(" || exit\nexec ") + QuoteCommandLineArgument(InLoreBinary) + TEXT(" ") + FullCommand + TEXT("\n");
 		if (!FFileHelper::SaveStringToFile(Script, *ScriptPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{

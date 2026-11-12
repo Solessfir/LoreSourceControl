@@ -115,7 +115,7 @@ bool FLoreLocalSubmitWorkerTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Local submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
 	TestEqual(TEXT("Local submit sequence"), FString::Join(Fixture.Calls, TEXT(" -> ")), FString(TEXT("stage -> read staged paths -> commit -> refresh status")));
-#if PLATFORM_LINUX
+#if PLATFORM_LINUX || PLATFORM_MAC
 	TestEqual(TEXT("Commit message is passed to Lore"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- 'Test commit'")));
 #else
 	TestEqual(TEXT("Commit message is passed to Lore"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- \"Test commit\"")));
@@ -133,7 +133,7 @@ bool FLoreLiteralCommitDescriptionWorkerTest::RunTest(const FString& Parameters)
 	Fixture.Operation->SetDescription(FText::FromString(TEXT("-message 'quoted' \"double quoted\"\nsecond line")));
 
 	TestTrue(TEXT("Literal description submit succeeds"), Fixture.Worker->Execute(Fixture.Command));
-#if PLATFORM_LINUX
+#if PLATFORM_LINUX || PLATFORM_MAC
 	TestEqual(TEXT("Description is protected from option parsing and quoted as one argument"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- '-message '\"'\"'quoted'\"'\"' \"double quoted\"\nsecond line'")));
 #else
 	TestEqual(TEXT("Description is protected from option parsing and quoted as one argument"), FString::Join(Fixture.CommitParameters, TEXT(" ")), FString(TEXT("-- \"-message 'quoted' \\\"double quoted\\\"\nsecond line\"")));
