@@ -30,9 +30,11 @@ cp -R "$out" "$here/Tests/HostProject/Plugins/$name"
 rm -rf "$here/Tests/HostProject/Plugins/$name/Intermediate"
 [ -n "${LORE_BIN_DIR:-}" ] && export PATH="$LORE_BIN_DIR:$PATH"
 rm -f "$logdir/HostProject.log"
-"$editor" "$here/Tests/HostProject/HostProject.uproject" -unattended -nullrhi -nosplash -nosound -nopause \
+"$editor" "$here/Tests/HostProject/HostProject.uproject" -unattended -nullrhi -nosplash -nosound -nopause -nocrashreports \
   -ExecCmds="Automation RunTests $filter" -TestExit="Automation Test Queue Empty" -log >/dev/null 2>&1 || true
 log="$logdir/HostProject.log"
+# A crashed run must not leave a crash reporter behind.
+pkill -f "CrashReportClient.*CrashReport-UE-HostProject-" 2>/dev/null || true
 [ -f "$log" ] || { echo "no editor log at $log (the editor probably crashed)"; exit 1; }
 grep -E "Test Completed\. Result=" "$log" | sed -E 's/.*Result=\{([A-Za-z]+)\}.*Path=\{([^}]*)\}.*/\1\t\2/' | sort -k2 > "$here/Tests/HostProject/Saved/results.tsv" || true
 pass=$(grep -c "^Success" "$here/Tests/HostProject/Saved/results.tsv" || true); fail=$(grep -c -v "^Success" "$here/Tests/HostProject/Saved/results.tsv" || true)
