@@ -9,6 +9,8 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "Containers/StringConv.h"
 #include "HAL/FileManager.h"
 #include "Logging/StructuredLog.h"
 #include "UObject/UObjectGlobals.h"
@@ -18,6 +20,129 @@
 #include "UObject/SoftObjectPath.h"
 
 #define LOCTEXT_NAMESPACE "LoreSourceControl"
+
+namespace
+{
+	struct FLoreProcessResult
+	{
+		int32 ReturnCode = -1;
+		FString Stdout;
+		FString Stderr;
+		bool bLaunched = false;
+		bool bTimedOut = false;
+		bool bKilled = false;
+	};
+
+	// How long each lore command may run before it is stopped. Quick reads are short; a full scan, a commit, a push or a sync can
+	// legitimately take minutes on a large repository.
+	double LoreTimeoutSeconds(const FString& InCommand, const TArray<FString>& InParameters)
+	{
+		if (InCommand == TEXT("status"))
+		{
+			return InParameters.Contains(TEXT("--scan")) ? 600.0 : 60.0;
+		}
+		static const TCHAR* const QuickReads[] = { TEXT("--version"), TEXT("lock query"), TEXT("auth info"), TEXT("branch info"), TEXT("branch list"), TEXT("file history") };
+		for (const TCHAR* Command : QuickReads)
+		{
+			if (InCommand == Command)
+			{
+				return 30.0;
+			}
+		}
+		static const TCHAR* const LongWork[] = { TEXT("commit"), TEXT("branch push"), TEXT("sync"), TEXT("branch switch"), TEXT("file write") };
+		for (const TCHAR* Command : LongWork)
+		{
+			if (InCommand == Command)
+			{
+				return 1800.0;
+			}
+		}
+		return 300.0;
+	}
+
+	// Runs a process to completion or to its deadline, reading both streams as data arrives.
+	// Unlike FPlatformProcess::ExecProcess it never waits forever, and a process that dies from a signal (no return code) is a failure,
+	// where ExecProcess asserts on Mac and Linux and takes the editor down.
+	FLoreProcessResult RunProcessBounded(const FString& InExecutable, const FString& InArguments, const FString& InWorkingDirectory, double InTimeoutSeconds)
+	{
+		FLoreProcessResult Result;
+		void* StdoutRead = nullptr;
+		void* StdoutWrite = nullptr;
+		void* StderrRead = nullptr;
+		void* StderrWrite = nullptr;
+		if (!FPlatformProcess::CreatePipe(StdoutRead, StdoutWrite))
+		{
+			return Result;
+		}
+		if (!FPlatformProcess::CreatePipe(StderrRead, StderrWrite))
+		{
+			FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
+			return Result;
+		}
+
+		FProcHandle Process = FPlatformProcess::CreateProc(*InExecutable, *InArguments, false, true, true, nullptr, 0,
+			InWorkingDirectory.IsEmpty() ? nullptr : *InWorkingDirectory, StdoutWrite, nullptr, StderrWrite);
+
+		TArray<uint8> StdoutBytes;
+		TArray<uint8> StderrBytes;
+		auto Drain = [&]()
+		{
+			TArray<uint8> Chunk;
+			while (FPlatformProcess::ReadPipeToArray(StdoutRead, Chunk) && Chunk.Num() > 0)
+			{
+				StdoutBytes.Append(Chunk);
+				Chunk.Reset();
+			}
+			while (FPlatformProcess::ReadPipeToArray(StderrRead, Chunk) && Chunk.Num() > 0)
+			{
+				StderrBytes.Append(Chunk);
+				Chunk.Reset();
+			}
+		};
+
+		if (Process.IsValid())
+		{
+			Result.bLaunched = true;
+			const double Deadline = FPlatformTime::Seconds() + InTimeoutSeconds;
+			while (FPlatformProcess::IsProcRunning(Process))
+			{
+				Drain();
+				if (FPlatformTime::Seconds() > Deadline)
+				{
+					FPlatformProcess::TerminateProc(Process, true);
+					Result.bTimedOut = true;
+					break;
+				}
+				FPlatformProcess::Sleep(0.005f);
+			}
+			// A terminated process can take a moment to go; never wait on it for long.
+			const double ExitDeadline = FPlatformTime::Seconds() + 5.0;
+			while (FPlatformProcess::IsProcRunning(Process) && FPlatformTime::Seconds() < ExitDeadline)
+			{
+				Drain();
+				FPlatformProcess::Sleep(0.01f);
+			}
+			Drain();
+
+			int32 ReturnCode = -1;
+			if (FPlatformProcess::GetProcReturnCode(Process, &ReturnCode))
+			{
+				Result.ReturnCode = ReturnCode;
+			}
+			else if (!Result.bTimedOut)
+			{
+				Result.bKilled = true;
+			}
+			FPlatformProcess::CloseProc(Process);
+		}
+
+		FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
+		FPlatformProcess::ClosePipe(StderrRead, StderrWrite);
+		Result.Stdout = FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(StdoutBytes.GetData()), StdoutBytes.Num()));
+		Result.Stderr = FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(StderrBytes.GetData()), StderrBytes.Num()));
+		return Result;
+	}
+}
 
 namespace FLoreSourceControlUtils
 {
@@ -147,13 +272,8 @@ namespace FLoreSourceControlUtils
 			return false;
 		}
 
-		int32 ReturnCode = 0;
-		FString OutResults;
-		FString OutErrors;
-
-		FPlatformProcess::ExecProcess(*Candidate, TEXT("--version"), &ReturnCode, &OutResults, &OutErrors);
-
-		return ReturnCode == 0 && ParseLoreVersion(OutResults, OutVersion);
+		const FLoreProcessResult Run = RunProcessBounded(Candidate, TEXT("--version"), FString(), LoreTimeoutSeconds(TEXT("--version"), TArray<FString>()));
+		return Run.bLaunched && !Run.bTimedOut && !Run.bKilled && Run.ReturnCode == 0 && ParseLoreVersion(Run.Stdout, OutVersion);
 	}
 
 	static bool TryExecuteLoreVersion(const FString& Candidate, FString& OutUsedCommand)
@@ -486,6 +606,7 @@ namespace FLoreSourceControlUtils
 		}
 
 		UE_LOGFMT(LogSourceControl, Verbose, "[Lore] {Binary} {Command} (cwd={WorkingDirectory})", InLoreBinary, FullCommand, WorkingDir);
+		const double Timeout = LoreTimeoutSeconds(InCommand, InParameters);
 
 #if PLATFORM_LINUX
 		// UE's Unix process API ignores the working directory and cannot preserve arbitrary embedded quotes.
@@ -496,11 +617,26 @@ namespace FLoreSourceControlUtils
 			OutErrorMessages.Add(TEXT("Could not write the temporary Lore command."));
 			return false;
 		}
-		FPlatformProcess::ExecProcess(TEXT("/bin/sh"), *ScriptPath, &ReturnCode, &Results, &Errors);
+		const FLoreProcessResult Run = RunProcessBounded(TEXT("/bin/sh"), ScriptPath, FString(), Timeout);
 		IFileManager::Get().Delete(*ScriptPath);
 #else
-		FPlatformProcess::ExecProcess(*InLoreBinary, *FullCommand, &ReturnCode, &Results, &Errors, *WorkingDir);
+		const FLoreProcessResult Run = RunProcessBounded(InLoreBinary, FullCommand, WorkingDir, Timeout);
 #endif
+		ReturnCode = Run.ReturnCode;
+		Results = Run.Stdout;
+		Errors = Run.Stderr;
+		if (!Run.bLaunched)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("Could not start lore (%s)."), *InLoreBinary));
+		}
+		if (Run.bTimedOut)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("lore %s timed out after %.0f seconds and was stopped."), *InCommand, Timeout));
+		}
+		if (Run.bKilled)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("lore %s was killed before it finished."), *InCommand));
+		}
 
 		Results.ParseIntoArray(OutResults, TEXT("\n"), true);
 		TArray<FString> StderrMessages;
@@ -518,7 +654,7 @@ namespace FLoreSourceControlUtils
 			UE_LOGFMT(LogSourceControl, Warning, "[Lore] Stderr:\n{Stderr}", Errors);
 		}
 
-		return ReturnCode == 0;
+		return Run.bLaunched && !Run.bTimedOut && !Run.bKilled && ReturnCode == 0;
 	}
 
 	bool RunUpdateStatus(const FString& InLoreBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, FLoreSourceControlProvider& InProvider, bool bQueryLocks, TArray<FString>& OutErrorMessages, TArray<FLoreSourceControlState>& OutStates)

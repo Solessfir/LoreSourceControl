@@ -328,12 +328,11 @@ bool FLoreConnectScansProjectFilesTest::RunTest(const FString& Parameters)
 
 #endif
 
-// Fix B2: lore dying from a signal must be a failed command, never an editor crash. Kept under its
-// own prefix because today it takes the editor down; run it on its own:
-//   -ExecCmds="Automation RunTests LoreCrashProbe"
+// Fix B2: lore dying from a signal must be a failed command, never an editor crash (it used to fail the
+// engine's check(bGotReturnCode) in ExecProcess on Mac and Linux).
 #if WITH_DEV_AUTOMATION_TESTS && (PLATFORM_MAC || PLATFORM_LINUX)
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreKilledLoreIsAFailureTest, "LoreCrashProbe.Process.KilledLoreIsAFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoreKilledLoreIsAFailureTest, "LoreSourceControl.Process.KilledLoreIsAFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FLoreKilledLoreIsAFailureTest::RunTest(const FString& Parameters)
 {
